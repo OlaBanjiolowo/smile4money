@@ -96,6 +96,28 @@ const DISPUTE_WINDOW_LEDGERS: u32 = 17_280;
 /// result, either player may call `claim_timeout` to reclaim their stake.
 const TIMEOUT_LEDGERS: u32 = 120_960;
 
+/// Reserve buffer (in stroops) that the contract must always retain **after** a
+/// payout, in order to satisfy Stellar's minimum-account-balance rule and leave
+/// a small operational safety margin.
+///
+/// Every Stellar account (including the address that backs a Soroban contract)
+/// must hold at least 2 base reserves = **1 XLM** just to exist on the ledger.
+/// If an escrow payout would reduce the contract balance below that threshold,
+/// the underlying Stellar `PAYMENT` / `transfer` op aborts and the match state
+/// machine is left inconsistent (state not advanced, funds not sent).
+///
+/// We therefore require that after any payout the contract still holds at least
+/// `ESCROW_RESERVE_BUFFER_STROOPS` of the configured token. When the configured
+/// token is the native XLM token this value is the literal stroop reserve kept
+/// in the account. For non-native tokens (e.g. USDC) the same constant still
+/// serves as a floor — the real XLM minimum is still provided by a separate
+/// admin-funded 1.5 XLM native top-up (see `docs/deployment.md`), and the
+/// identical on-chain check prevents a 100%-held-USDC balance from causing a
+/// confusing generic `TransferFailed`.
+///
+/// `15 000 000 stroops = 1.5 XLM` (1 XLM minimum base reserve + 0.5 XLM slack).
+const ESCROW_RESERVE_BUFFER_STROOPS: i128 = 15_000_000;
+
 #[contract]
 pub struct EscrowContract;
 
@@ -119,6 +141,27 @@ impl EscrowContract {
     fn validate_match_id(env: &Env, match_id: u64) -> Result<(), Error> {
         if match_id >= Self::get_match_count(env) {
             return Err(Error::MatchNotFound);
+        }
+        Ok(())
+    }
+
+    /// Pre-flight check that the contract retains at least
+    /// [`ESCROW_RESERVE_BUFFER_STROOPS`] of `token` **after** a total payout of
+    /// `payout_total` is subtracted.
+    ///
+    /// Without this guard a token::transfer performed at payout time could
+    /// fail at the Stellar protocol layer with a reserve-induced
+    /// `op_under_min_balance` / generic `TransferFailed`, leaving the match
+    /// state machine stuck (funds not sent, state still `PendingResult` etc.).
+    fn ensure_reserve_for_payout(
+        env: &Env,
+        token: &Address,
+        payout_total: i128,
+    ) -> Result<(), Error> {
+        let client = token::Client::new(env, token);
+        let balance = client.balance(&env.current_contract_address());
+        if balance < payout_total + ESCROW_RESERVE_BUFFER_STROOPS {
+            return Err(Error::InsufficientReserve);
         }
         Ok(())
     }
@@ -202,7 +245,7 @@ impl EscrowContract {
 
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         env.events().publish(
-            (Symbol::new(&env, "admin"), symbol_short!("transfer")),
+            (Symbol::new(&env, "admin"), symbol_short!("adm_xfer")),
             (current_admin, new_admin),
         );
         Ok(())
@@ -612,6 +655,12 @@ impl EscrowContract {
             _ => m.stake_amount * 2,
         };
 
+        let total_payout = match winner {
+            Winner::Draw => payout_amount * 2,
+            _ => payout_amount,
+        };
+        Self::ensure_reserve_for_payout(&env, &m.token, total_payout)?;
+
         match winner.clone() {
             Winner::Player1 => {
                 client.transfer(&env.current_contract_address(), &m.player1, &payout_amount)
@@ -691,6 +740,8 @@ impl EscrowContract {
         }
 
         let client = token::Client::new(&env, &m.token);
+        let refund_total = m.stake_amount * 2;
+        Self::ensure_reserve_for_payout(&env, &m.token, refund_total)?;
         // Refund both players their original stake
         client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
         client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
@@ -752,6 +803,10 @@ impl EscrowContract {
         let client = token::Client::new(&env, &m.token);
         let player1_refund: i128 = if m.player1_deposited { m.stake_amount } else { 0 };
         let player2_refund: i128 = if m.player2_deposited { m.stake_amount } else { 0 };
+        let refund_total = player1_refund + player2_refund;
+        if refund_total > 0 {
+            Self::ensure_reserve_for_payout(&env, &m.token, refund_total)?;
+        }
         if m.player1_deposited {
             client
                 .try_transfer(&env.current_contract_address(), &m.player1, &m.stake_amount)

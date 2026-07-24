@@ -168,6 +168,7 @@ sequenceDiagram
 | Escrow | `("admin", "paused")` | `()` |
 | Escrow | `("admin", "unpaused")` | `()` |
 | Escrow | `("admin", "oracle")` | `new_oracle` |
+| Escrow | `("admin", "adm_xfer")` | `(old_admin, new_admin)` |
 | Oracle | `("oracle", "init")` | `admin` |
 | Oracle | `("oracle", "result")` | `(match_id, result, timestamp)` |
 | Oracle | `("oracle", "adm_xfer")` | `(old_admin, new_admin)` |

@@ -97,6 +97,33 @@ stellar contract invoke \
   --oracle "$CONTRACT_ORACLE" \
   --admin "$DEPLOYER_ADDRESS"
 
+# ---------------------------------------------------------------------------
+# Fund escrow contract with a 1.5 XLM (15,000,000 stroops) native reserve
+# buffer. Every Stellar account needs ≥ 1 XLM minimum balance to exist;
+# payouts that would drop the escrow below that threshold abort at the
+# protocol layer, leaving the match state machine stuck. The 0.5 XLM surplus
+# covers rent / inclusion fees. See docs/deployment.md for details.
+# ---------------------------------------------------------------------------
+ESCROW_STELLAR_ADDRESS=$(stellar contract id address --id "$CONTRACT_ESCROW")
+echo "Funding escrow reserve buffer (1.5 XLM -> $ESCROW_STELLAR_ADDRESS)..."
+stellar tx build \
+  --source "$IDENTITY" \
+  --network "$NETWORK" \
+  --rpc-url "$RPC_URL" \
+  --network-passphrase "$NETWORK_PASSPHRASE" \
+  --operation payment \
+    --source-account "$DEPLOYER_ADDRESS" \
+    --destination "$ESCROW_STELLAR_ADDRESS" \
+    --asset native \
+    --amount 15000000 \
+  2>/dev/null | stellar tx send --source "$IDENTITY" --network "$NETWORK" --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" >/dev/null || {
+  echo "Warning: failed to send 1.5 XLM reserve to escrow. Please fund it manually:"
+  echo "  stellar tx build --source $IDENTITY --network $NETWORK " \
+       "--operation payment --source-account $DEPLOYER_ADDRESS " \
+       "--destination $ESCROW_STELLAR_ADDRESS --asset native --amount 15000000 " \
+       "| stellar tx send --source $IDENTITY --network $NETWORK"
+}
+
 # Write contract IDs to .env
 ENV_FILE=".env"
 if [[ ! -f "$ENV_FILE" ]]; then

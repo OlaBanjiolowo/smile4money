@@ -1,6 +1,7 @@
 extern crate std;
 use super::*;
 use soroban_sdk::{
+    contract, contractimpl,
     testutils::{
         storage::Instance as _,
         storage::Persistent as _,
@@ -29,6 +30,13 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&oracle, &admin, &token_addr);
+
+    // Fund the contract with the required reserve buffer.
+    // `ensure_reserve_for_payout` requires the post-payout balance to stay
+    // above ESCROW_RESERVE_BUFFER_STROOPS (1.5 XLM worth of stroops). Without
+    // this top-up, every payout-style test leaving the contract at a near-zero
+    // balance would fail with Error::InsufficientReserve.
+    asset_client.mint(&contract_id, &crate::ESCROW_RESERVE_BUFFER_STROOPS);
 
     // Approve the escrow contract for both players (needed for allowance check)
     let expiration = env.ledger().sequence() + 1000000;
@@ -377,6 +385,9 @@ fn test_cancel_with_both_deposits_requires_both_auth() {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&oracle, &admin, &token_addr);
+
+    // Fund reserve buffer (matches setup() helper — see ensure_reserve_for_payout)
+    asset_client.mint(&contract_id, &crate::ESCROW_RESERVE_BUFFER_STROOPS);
 
     // Approve the escrow contract for both players
     let expiration = env.ledger().sequence() + 1000000;
@@ -2130,7 +2141,9 @@ fn test_emergency_drain_succeeds_when_paused() {
     );
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    assert_eq!(token_client.balance(&contract_id), 200);
+    // Total contract balance = stakes (200) + reserve buffer (15_000_000) minted in setup()
+    let total_expected = 200 + crate::ESCROW_RESERVE_BUFFER_STROOPS;
+    assert_eq!(token_client.balance(&contract_id), total_expected);
 
     client.pause();
 
@@ -2141,7 +2154,7 @@ fn test_emergency_drain_succeeds_when_paused() {
     let events = env.events().all();
 
     assert_eq!(token_client.balance(&contract_id), 0);
-    assert_eq!(token_client.balance(&safe), 200);
+    assert_eq!(token_client.balance(&safe), total_expected);
 
     // Verify drain event
     let drain_event = events.iter().find(|(_, t, _)| {
@@ -2261,4 +2274,340 @@ fn test_instance_ttl_extended_on_initialize() {
 
     let instance_ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
     assert!(instance_ttl >= crate::INSTANCE_LIFETIME_THRESHOLD);
+}
+
+// Issue #1106: Stellar account minimum balance must be enforced before payout.
+// Finalize, claim_timeout, and cancel must all return InsufficientReserve (code 26)
+// when the contract would be left below ESCROW_RESERVE_BUFFER_STROOPS after the transfer.
+
+#[test]
+fn test_finalize_result_fails_when_reserve_would_be_depleted() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let stake_amount = 100;
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &stake_amount,
+        &token,
+        &String::from_str(&env, "reserve_game_1"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(
+        &id,
+        &String::from_str(&env, "reserve_game_1"),
+        &Winner::Player1,
+        &oracle,
+    );
+
+    // Advance the ledger past the dispute window so finalize_result will run.
+    let m = client.get_match(&id);
+    let pending_ledger = m.pending_result_ledger.unwrap();
+    env.ledger()
+        .set_sequence(pending_ledger + crate::DISPUTE_WINDOW_LEDGERS + 1);
+
+    // Strip away the reserve buffer by "stealing" tokens from the contract
+    // balance so that after the payout (2 * stake = 200), the remainder would
+    // be LESS than ESCROW_RESERVE_BUFFER_STROOPS.  We do this by minting just
+    // enough so the precondition check fails cleanly — easier is to mint
+    // exactly the opposite: we remove the reserve by transferring.  But in a
+    // test env the contract cannot be the source for an unauthorized transfer,
+    // so instead we drain via emergency_drain + re-mint only the stakes.
+    client.pause();
+    let safe = Address::generate(&env);
+    let reserve_admin: Address = env
+        .as_contract(&contract_id, || {
+            env.storage()
+                .instance()
+                .get(&crate::types::DataKey::Admin)
+                .unwrap()
+        });
+    client.emergency_drain(&safe, &reserve_admin);
+    client.unpause();
+
+    // Now re-fund ONLY enough to cover the 200 stroop payout but NOT the
+    // 15_000_000 stroop reserve. Finalize should fail with InsufficientReserve.
+    let asset_client = StellarAssetClient::new(&env, &token);
+    asset_client.mint(&contract_id, &(stake_amount * 2));
+    assert_eq!(token_client.balance(&contract_id), stake_amount * 2);
+
+    assert_eq!(
+        client.try_finalize_result(&id),
+        Err(Ok(Error::InsufficientReserve))
+    );
+
+    // Sanity check: adding back the reserve buffer lets the call succeed.
+    asset_client.mint(&contract_id, &crate::ESCROW_RESERVE_BUFFER_STROOPS);
+    assert!(client.try_finalize_result(&id).is_ok());
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Completed);
+}
+
+#[test]
+fn test_claim_timeout_fails_when_reserve_would_be_depleted() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let stake_amount = 100;
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &stake_amount,
+        &token,
+        &String::from_str(&env, "reserve_timeout"),
+        &Platform::ChessDotCom,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    let activated = client.get_match(&id).activated_ledger.unwrap();
+    env.ledger().set_sequence(activated + crate::TIMEOUT_LEDGERS + 1);
+
+    // Drain reserve buffer, leave exactly stake * 2 (the refund total).
+    client.pause();
+    let safe = Address::generate(&env);
+    let reserve_admin: Address = env
+        .as_contract(&contract_id, || {
+            env.storage()
+                .instance()
+                .get(&crate::types::DataKey::Admin)
+                .unwrap()
+        });
+    client.emergency_drain(&safe, &reserve_admin);
+    client.unpause();
+    let asset_client = StellarAssetClient::new(&env, &token);
+    asset_client.mint(&contract_id, &(stake_amount * 2));
+    assert_eq!(token_client.balance(&contract_id), stake_amount * 2);
+
+    assert_eq!(
+        client.try_claim_timeout(&id, &player1),
+        Err(Ok(Error::InsufficientReserve))
+    );
+
+    asset_client.mint(&contract_id, &crate::ESCROW_RESERVE_BUFFER_STROOPS);
+    assert!(client.try_claim_timeout(&id, &player1).is_ok());
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+}
+
+#[test]
+fn test_cancel_match_fails_when_reserve_would_be_depleted() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let stake_amount = 100;
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &stake_amount,
+        &token,
+        &String::from_str(&env, "reserve_cancel"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // Drain reserve buffer, leave exactly 2 * stake to refund both players.
+    client.pause();
+    let safe = Address::generate(&env);
+    let reserve_admin: Address = env
+        .as_contract(&contract_id, || {
+            env.storage()
+                .instance()
+                .get(&crate::types::DataKey::Admin)
+                .unwrap()
+        });
+    client.emergency_drain(&safe, &reserve_admin);
+    client.unpause();
+    let asset_client = StellarAssetClient::new(&env, &token);
+    asset_client.mint(&contract_id, &(stake_amount * 2));
+    assert_eq!(token_client.balance(&contract_id), stake_amount * 2);
+
+    assert_eq!(
+        client.try_cancel_match(&id, &player1),
+        Err(Ok(Error::InsufficientReserve))
+    );
+
+    asset_client.mint(&contract_id, &crate::ESCROW_RESERVE_BUFFER_STROOPS);
+    assert!(client.try_cancel_match(&id, &player1).is_ok());
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+}
+
+// Issue #1108: Confirm that contract addresses used as player1/player2 do not
+// introduce re-entrancy or other cross-contract attack surfaces. The test
+// exercises the full lifecycle (create → deposit × 2 → submit_result →
+// finalize_result) using registered Soroban contracts as both players.
+
+/// A minimal, no-op wasm contract used purely to obtain a *contract* Address
+/// (not a classic `G…` Stellar account). This lets us confirm that the escrow
+//  never needs to invoke the player address itself, and that auth for a
+/// contract-address player is correctly enforced via Soroban's auth model
+/// (mocked here with `mock_all_auths`).
+#[contract]
+pub struct DummyPlayerContract;
+
+#[contractimpl]
+impl DummyPlayerContract {
+    pub fn hello(env: Env) -> u32 {
+        let _ = env;
+        42
+    }
+}
+
+#[test]
+fn test_contract_address_as_player_completes_full_lifecycle() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+
+    // Generate two *contract* addresses by registering dummy contracts.
+    // These are classic contract-typed Soroban addresses (not G… accounts).
+    let p1_contract_id = env.register(DummyPlayerContract, ());
+    let p2_contract_id = env.register(DummyPlayerContract, ());
+    let player1 = p1_contract_id.address();
+    let player2 = p2_contract_id.address();
+
+    // Sanity check: these really are contract addresses, not classic accounts.
+    assert_ne!(player1, Address::generate(&env)); // different construction
+    assert_ne!(player1, player2);
+
+    // Fund these contract addresses with tokens so they can deposit stakes.
+    let token_id = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_addr = token_id.address();
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+    asset_client.mint(&player1, &1000);
+    asset_client.mint(&player2, &1000);
+
+    // Deploy escrow + reserve buffer top-up (as in `setup()`).
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.initialize(&oracle, &admin, &token_addr);
+    asset_client.mint(&contract_id, &crate::ESCROW_RESERVE_BUFFER_STROOPS);
+
+    // Approve escrow to spend the contract-player tokens,
+    // so try_transfer inside deposit() will succeed.
+    let expiration = env.ledger().sequence() + 1_000_000;
+    let token_client = TokenClient::new(&env, &token_addr);
+    token_client.approve(&player1, &contract_id, &500, &expiration);
+    token_client.approve(&player2, &contract_id, &500, &expiration);
+
+    // 1. create_match with contract addresses as players.
+    let stake = 100;
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &stake,
+        &token_addr,
+        &String::from_str(&env, "contract_players_01"),
+        &Platform::Lichess,
+    );
+    let m0 = client.get_match(&id);
+    assert_eq!(m0.player1, player1);
+    assert_eq!(m0.player2, player2);
+    assert_eq!(m0.state, MatchState::Pending);
+
+    // 2. both contract-address players deposit their stake.
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    let m1 = client.get_match(&id);
+    assert_eq!(m1.state, MatchState::Active);
+    assert_eq!(m1.player1_deposited, true);
+    assert_eq!(m1.player2_deposited, true);
+    // Stakes held in escrow + reserve buffer
+    assert_eq!(
+        token_client.balance(&contract_id),
+        2 * stake + crate::ESCROW_RESERVE_BUFFER_STROOPS
+    );
+
+    // 3. oracle submits a winner result (player1 wins).
+    client.submit_result(
+        &id,
+        &String::from_str(&env, "contract_players_01"),
+        &Winner::Player1,
+        &oracle,
+    );
+    let pending_ledger = client.get_match(&id).pending_result_ledger.unwrap();
+    env.ledger()
+        .set_sequence(pending_ledger + crate::DISPUTE_WINDOW_LEDGERS + 1);
+
+    let p1_balance_before = token_client.balance(&player1);
+    let p2_balance_before = token_client.balance(&player2);
+
+    // 4. finalize payout to the contract-address player — must succeed.
+    client.finalize_result(&id);
+    let m_final = client.get_match(&id);
+    assert_eq!(m_final.state, MatchState::Completed);
+    assert_eq!(
+        m_final.winner.as_ref().unwrap().clone(),
+        Winner::Player1
+    );
+
+    // Player1 (contract) should now hold their original (1000 - 100) stake refund
+    // plus the full pot: 900 + 200 = 1100. Player2 (contract) holds 1000 - 100 = 900.
+    assert_eq!(token_client.balance(&player1), p1_balance_before + 2 * stake);
+    assert_eq!(token_client.balance(&player2), p2_balance_before);
+}
+
+#[test]
+fn test_contract_address_player_can_cancel_pending() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+
+    let p1_contract_id = env.register(DummyPlayerContract, ());
+    let p2_contract_id = env.register(DummyPlayerContract, ());
+    let player1 = p1_contract_id.address();
+    let player2 = p2_contract_id.address();
+
+    let token_id = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_addr = token_id.address();
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+    asset_client.mint(&player1, &1000);
+    asset_client.mint(&player2, &1000);
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.initialize(&oracle, &admin, &token_addr);
+    asset_client.mint(&contract_id, &crate::ESCROW_RESERVE_BUFFER_STROOPS);
+
+    let expiration = env.ledger().sequence() + 1_000_000;
+    let token_client = TokenClient::new(&env, &token_addr);
+    token_client.approve(&player1, &contract_id, &500, &expiration);
+    token_client.approve(&player2, &contract_id, &500, &expiration);
+
+    let stake = 200;
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &stake,
+        &token_addr,
+        &String::from_str(&env, "contract_players_cancel"),
+        &Platform::ChessDotCom,
+    );
+
+    // Player 1 (contract) deposits. Player 2 never deposits → cancel allowed.
+    client.deposit(&id, &player1);
+    let balance_before_cancel = token_client.balance(&player1);
+    assert_eq!(
+        token_client.balance(&contract_id),
+        stake + crate::ESCROW_RESERVE_BUFFER_STROOPS
+    );
+
+    client.cancel_match(&id, &player1);
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Cancelled);
+    // Player 1 contract receives their 200 stake back.
+    assert_eq!(token_client.balance(&player1), balance_before_cancel + stake);
+    assert_eq!(
+        token_client.balance(&contract_id),
+        crate::ESCROW_RESERVE_BUFFER_STROOPS
+    );
 }

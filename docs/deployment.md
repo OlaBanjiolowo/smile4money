@@ -259,6 +259,91 @@ Additionally:
 - [ ] Run a smoke test: create a test match, deposit stake, and cancel it to verify the full flow.
 - [ ] Update the frontend configuration with the new mainnet contract IDs and network.
 
+## Contract Account Minimum Balance & Deployment Buffer
+
+### Rationale
+
+Every Stellar account — including the underlying Stellar `AccountEntry` that backs a Soroban contract address — must hold a **minimum balance** derived from the network's *base reserve* to continue to exist on the ledger. As of Protocol 21 the base reserve is **0.5 XLM**, and a bare account requires 2 base reserves = **1 XLM** to remain active. Any operation that would drop an account below this threshold (e.g. a `PAYMENT` sent by the contract during a payout) is aborted at the protocol layer with `op_under_min_balance`.
+
+If the escrow contract held *exactly* the stake amounts deposited by the players and nothing more, a winner-takes-all payout that sends `2 × stake` out of the contract would leave the account at **0 XLM**, below the 1 XLM minimum. The transfer would abort inside the `finalize_result` / `claim_timeout` / `cancel_match` call with the generic on-chain error `Error::TransferFailed` (code 15), but crucially **the state transition would never be applied** — the match would remain stuck in `PendingResult` / `Active` / `Pending` state and players' funds could not move.
+
+### Required Buffer
+
+To prevent this, the escrow contract address must be topped up with **1.5 XLM (15,000,000 stroops)** of the **native XLM token** immediately after deployment + initialization. This 1.5 XLM is broken down as:
+
+| Component              | Amount    | Purpose                                                                |
+|------------------------|-----------|------------------------------------------------------------------------|
+| Base minimum balance   | 1.0 XLM   | 2 × base reserve — the legal minimum to keep the account on-ledger.   |
+| Operational safety pad | 0.5 XLM   | Extra slack for rent, inclusion fees, and small rebalancing mistakes.  |
+| **Total**              | **1.5 XLM** | Recommended one-time deployment buffer.                                |
+
+> **Why native XLM even if the configured token is USDC?** The Stellar minimum-balance rule always applies in XLM regardless of which SAC token the contract is configured to escrow. USDC held in the contract does **not** count toward the XLM reserve requirement. You must therefore always fund the contract address with at least 1.5 XLM of native lumens *in addition to* the USDC stakes that players deposit.
+
+### On-Chain Safety Guard
+
+The escrow contract enforces the same 1.5 XLM figure in software via the `ensure_reserve_for_payout` helper (see `ESCROW_RESERVE_BUFFER_STROOPS` in `contracts/escrow/src/lib.rs`). Before it performs any transfer during `finalize_result`, `claim_timeout`, or `cancel_match`, it calls `token.balance(current_contract_address)` and returns the explicit error `Error::InsufficientReserve` (code 26) if `balance - payout < 15_000_000 stroops`. This surfaces a clean, actionable error instead of letting payouts silently fail part-way through.
+
+### Funding the buffer (deploy scripts)
+
+Both `scripts/deploy_testnet.sh` and `scripts/deploy_mainnet.sh` have been updated to perform the 1.5 XLM top-up automatically **after** the `initialize` call. You do not need to run the manual steps below for fresh deploys. They are documented here for reference / manual recovery.
+
+### Funding the buffer (manual)
+
+If you are re-using an existing contract, or if the automatic top-up was skipped, send 1.5 XLM from the deployer (or any funded admin account) directly to the contract's Stellar address:
+
+```bash
+# 1. First convert the contract ID -> its underlying Stellar G-address
+ESCROW_CC="$(grep CONTRACT_ESCROW .env | cut -d= -f2)"
+ESCROW_ADDR="$(stellar contract id address --id "$ESCROW_CC" | tail -1)"
+echo "Escrow Stellar address: $ESCROW_ADDR"
+
+# 2. Build + submit a native payment op for 1.5 XLM = 15,000,000 stroops
+stellar tx build \
+  --source deployer \
+  --operation payment \
+    --source-account deployer \
+    --destination "$ESCROW_ADDR" \
+    --asset native \
+    --amount 15000000 \
+  | stellar tx send --source deployer --network testnet
+```
+
+For mainnet, replace `--network testnet` with `--network mainnet` and the mainnet RPC / passphrase flags.
+
+### Verifying buffer health
+
+```bash
+# Option A: stellar keys balance on the contract's G-address
+stellar keys balance "$ESCROW_ADDR" --network testnet
+# Expected output shows at least 1.5000000 XLM native balance in addition to any SAC tokens held.
+
+# Option B: query the native XLM SAC balance of the contract via the zero-address token
+# (native XLM SAC is conventionally at address = all-zero contract ID)
+NATIVE_XLM_TOKEN="CCGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+stellar contract invoke \
+  --id "$NATIVE_XLM_TOKEN" \
+  --source deployer \
+  --network testnet \
+  --rpc-url https://soroban-testnet.stellar.org \
+  --network-passphrase "Test SDF Network ; September 2015" \
+  -- balance \
+  --id "$(stellar contract id address --id "$ESCROW_CC")"
+```
+
+### Symptoms of a depleted buffer
+
+If you see the following, the reserve buffer is almost certainly gone:
+
+- `finalize_result`, `claim_timeout`, or `cancel_match` return `Error::TransferFailed` (code 15) on stakes that should obviously be covered by the contract.
+- Horizon / RPC reports the contract's account `balance` ≤ 1.0000000 XLM.
+- Attempts to send funds **out** of the contract fail, while deposits **into** the contract still succeed.
+
+The immediate recovery step is to re-fund the contract with another 1.5 XLM (see manual command above) and then re-submit the stuck payout transaction. No other state migration is needed because the contract never advanced the match state when the original transfer aborted.
+
+### Oracle contract
+
+The oracle contract currently never sends tokens itself, so it does not technically need an XLM buffer. However, best practice is to also send it **0.5 XLM** after deployment, to cover rent payments and any future oracle-initiated operations without another top-up.
+
 ## Troubleshooting
 
 ### `stellar: command not found`

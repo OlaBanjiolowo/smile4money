@@ -36,6 +36,7 @@ use soroban_sdk::contracterror;
 /// | 23   | InvalidAdmin          | the new admin address is invalid (zero address or same as current admin) |
 /// | 24   | StakeTooLow           | stake_amount is below the minimum allowed stake |
 /// | 25   | StakeTooHigh          | stake_amount exceeds the maximum allowed stake |
+/// | 26   | InsufficientReserve   | contract balance too low to cover payout + Stellar minimum reserve |
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -123,4 +124,9 @@ pub enum Error {
 
     /// [E025] `stake_amount` exceeds the maximum allowed stake (`MAX_STAKE`).
     StakeTooHigh = 25,
+
+    /// [E026] The contract's token balance would fall below the required Stellar
+    /// minimum account reserve after the payout. Top up the contract address with
+    /// enough XLM (or configured token) to cover the 1.5 XLM reserve buffer, then retry.
+    InsufficientReserve = 26,
 }
