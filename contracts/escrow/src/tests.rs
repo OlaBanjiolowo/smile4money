@@ -2262,3 +2262,31 @@ fn test_instance_ttl_extended_on_initialize() {
     let instance_ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
     assert!(instance_ttl >= crate::INSTANCE_LIFETIME_THRESHOLD);
 }
+
+// Issue #1128: list_matches returns empty slice when start >= match_count
+#[test]
+fn test_list_matches_empty_when_start_at_or_beyond_count() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create 3 matches so match_count == 3 (IDs 0, 1, 2)
+    let game_ids = ["game-0", "game-1", "game-2"];
+    for gid in game_ids {
+        client.create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &String::from_str(&env, gid),
+            &Platform::Lichess,
+        );
+    }
+
+    // start == match_count (3) — first index past the end
+    let result = client.list_matches(&3, &5);
+    assert!(result.is_empty(), "expected empty slice when start == match_count");
+
+    // start > match_count (10) — well beyond the end
+    let result = client.list_matches(&10, &5);
+    assert!(result.is_empty(), "expected empty slice when start > match_count");
+}
