@@ -8,7 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+#### Smart Contract — Escrow
+- `PendingResult` match state for dispute window support (#TBD)
+- `claim_timeout` configuration for dispute window duration (#TBD)
+- `override_result` admin function to correct fraudulent oracle submissions during dispute window (#TBD)
+- `claim_payout` function for winners to claim funds after dispute window expires (#TBD)
+- Stake amount limits (minimum and maximum) validation (#TBD)
+
+#### Documentation
 - Document `environments.toml` fields in `README.md` with descriptions and defaults (#115)
+- Prerequisites section in `CONTRIBUTING.md` now specifies Rust 1.88.0 from `rust-toolchain.toml` (#1114)
+- Oracle key compromise response runbook entry in `docs/runbook.md` (#1115)
+
+### Changed
+- Match state machine now includes `PendingResult` intermediate state between `Active` and `Completed`
+- Winner payouts require explicit `claim_payout` call after dispute window expires
+- `submit_result` transitions matches to `PendingResult` instead of immediately completing
 
 ## [0.2.0] - 2026-06-24
 
