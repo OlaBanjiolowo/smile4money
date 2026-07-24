@@ -9,10 +9,11 @@
 
 1. [Emergency Contract Pause](#1-emergency-contract-pause)
 2. [Oracle Signing Key Rotation](#2-oracle-signing-key-rotation)
-3. [Emergency Fund Drain](#3-emergency-fund-drain)
-4. [Unpausing the Contract](#4-unpausing-the-contract)
-5. [Post-Incident Report Template](#5-post-incident-report-template)
-6. [Contact Escalation List](#6-contact-escalation-list)
+3. [Oracle Key Compromise Response](#3-oracle-key-compromise-response)
+4. [Emergency Fund Drain](#4-emergency-fund-drain)
+5. [Unpausing the Contract](#5-unpausing-the-contract)
+6. [Post-Incident Report Template](#6-post-incident-report-template)
+7. [Contact Escalation List](#7-contact-escalation-list)
 
 ---
 
@@ -183,7 +184,139 @@ journalctl -u smile4money-oracle -f    # watch for errors
 
 ---
 
-## 3. Emergency Fund Drain
+## 3. Oracle Key Compromise Response
+
+**When to use:** You have confirmed or strongly suspect the oracle signing key has been leaked,
+stolen, or otherwise compromised (e.g. key found in logs, repo, or environment variable leak).
+
+> ⚠️ **Treat this as a Critical incident.** A compromised oracle key means an attacker can
+> fabricate match results and drain escrow funds for any active match.
+
+**Who can respond:** Admin keyholder (for pause and `update_oracle`), oracle service owner (for
+auditing events and key destruction).
+
+### Steps
+
+#### 3.1 Pause the escrow contract immediately
+
+Do this **first**, before any investigation. Every second the contract is unpaused, an attacker
+with the oracle key can call `submit_result` and steal funds.
+
+```bash
+stellar contract invoke \
+  --id "$CONTRACT_ESCROW" \
+  --source admin-key \
+  --network testnet \
+  -- pause
+```
+
+Verify the pause is in effect (see [§1.3](#13-verify-the-pause-is-in-effect)).
+
+Post to the incident channel:
+
+```
+[CRITICAL INCIDENT] Oracle key suspected compromised. Escrow PAUSED at ledger <N>.
+Auditing submit_result events. Do NOT unpause until new oracle key is confirmed.
+```
+
+#### 3.2 Call `update_oracle` with a new safe address
+
+Generate a fresh oracle keypair on a clean machine (air-gapped for mainnet):
+
+```bash
+# Generate new keypair
+stellar keys generate new-oracle-key --network testnet
+stellar keys address new-oracle-key
+# Save the output as NEW_ORACLE_ADDRESS
+```
+
+Register the new key on the escrow contract:
+
+```bash
+stellar contract invoke \
+  --id "$CONTRACT_ESCROW" \
+  --source admin-key \
+  --network testnet \
+  -- update_oracle \
+  --new_oracle "$NEW_ORACLE_ADDRESS"
+```
+
+Also rotate the oracle contract's own admin (see [§2.4](#24-call-transfer_admin-on-the-oracle-contract)).
+
+The old key is now rejected by the escrow contract even if the attacker still holds it.
+
+#### 3.3 Audit all `submit_result` events since the compromise date
+
+Identify the earliest ledger at which the key could have been compromised, then query all
+`submit_result` events from that ledger forward:
+
+```bash
+# Query the Stellar RPC for contract events emitted by the escrow contract
+curl -s "https://soroban-testnet.stellar.org" \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "getEvents",
+    "params": {
+      "startLedger": <COMPROMISE_LEDGER>,
+      "filters": [{
+        "type": "contract",
+        "contractIds": ["'"$CONTRACT_ESCROW"'"],
+        "topics": [["*", "result"]]
+      }]
+    }
+  }'
+```
+
+For each event, cross-reference with:
+- The actual match outcome on Lichess/Chess.com using the `game_id`
+- The on-chain payout destination
+
+Flag any result where the recorded winner does not match the actual game outcome.
+
+#### 3.4 For fraudulent results, call `override_result` during the dispute window
+
+If any `submit_result` calls were fraudulent, override them before the dispute window expires:
+
+```bash
+stellar contract invoke \
+  --id "$CONTRACT_ESCROW" \
+  --source admin-key \
+  --network testnet \
+  -- override_result \
+  --match_id "$AFFECTED_MATCH_ID" \
+  --correct_winner '{"Player1Wins":{}}' \
+  --caller "$ADMIN_ADDRESS"
+```
+
+> ⚠️ **Time-sensitive:** `override_result` is only valid within the dispute window
+> (`claim_timeout` ledgers after `submit_result` was called). Check the `pending_result_ledger`
+> field on the affected match and act promptly.
+
+Repeat for each fraudulent match result identified in §3.3.
+
+#### 3.5 Unpause the contract
+
+Only unpause after:
+
+- [ ] New oracle key is registered and the oracle service is running with it
+- [ ] All fraudulent results have been overridden
+- [ ] All affected players have been notified and refunds confirmed where applicable
+- [ ] A second team member has reviewed the audit findings
+
+See [§5 Unpausing the Contract](#5-unpausing-the-contract) for the unpause command and checklist.
+
+#### 3.6 Destroy and revoke the old key
+
+- Delete the key from all `.env` files, CI secrets, and cloud secret stores
+- If using a hardware wallet, revoke the compromised signing slot
+- Document the compromise in the incident log and open a post-incident report (see §6)
+
+---
+
+## 4. Emergency Fund Drain
 
 **When to use:** Active exploit with no time for match-by-match resolution. Transfers the
 entire contract token balance to a safe cold-wallet address.
@@ -198,9 +331,9 @@ entire contract token balance to a safe cold-wallet address.
 
 ### Steps
 
-#### 3.1 Confirm the contract is paused (see §1.3)
+#### 4.1 Confirm the contract is paused (see §1.3)
 
-#### 3.2 Execute the drain
+#### 4.2 Execute the drain
 
 ```bash
 stellar contract invoke \
@@ -212,7 +345,7 @@ stellar contract invoke \
   --caller "$ADMIN_ADDRESS"
 ```
 
-#### 3.3 Confirm balance is zero
+#### 4.3 Confirm balance is zero
 
 ```bash
 stellar contract invoke \
@@ -236,11 +369,11 @@ stellar contract invoke \
 # Expected: 0
 ```
 
-#### 3.4 Record the drain transaction hash and notify all stakeholders
+#### 4.4 Record the drain transaction hash and notify all stakeholders
 
 ---
 
-## 4. Unpausing the Contract
+## 5. Unpausing the Contract
 
 Only unpause after the incident is fully resolved and the root cause has been addressed.
 
@@ -280,7 +413,7 @@ stellar contract invoke \
 
 ---
 
-## 5. Post-Incident Report Template
+## 6. Post-Incident Report Template
 
 Copy this template and fill it in for every incident, regardless of severity.
 
@@ -343,7 +476,7 @@ Copy this template and fill it in for every incident, regardless of severity.
 
 ---
 
-## 6. Contact Escalation List
+## 7. Contact Escalation List
 
 > Replace placeholder entries with real contact information before deploying to mainnet.
 

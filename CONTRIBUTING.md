@@ -4,8 +4,16 @@ Thank you for your interest in contributing! This document covers environment se
 
 ## Prerequisites
 
-- **Rust** 1.70+ — [rustup.rs](https://rustup.rs)
-- **wasm32 target**: `rustup target add wasm32-unknown-unknown`
+- **Rust** 1.88.0 (pinned via `rust-toolchain.toml`) — [rustup.rs](https://rustup.rs)
+  ```bash
+  # Install rustup (if not already installed)
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  
+  # The project's rust-toolchain.toml will automatically install Rust 1.88.0
+  # and the wasm32-unknown-unknown target when you first run cargo commands
+  ```
+- **wasm32 target** (required for Soroban contracts): `rustup target add wasm32-unknown-unknown`
+  - **Note**: This target is automatically installed when you build if `rust-toolchain.toml` is present
 - **Stellar CLI** — [install guide](https://developers.stellar.org/docs/tools/developer-tools/cli/install-cli)
 - **Git**
 

@@ -479,6 +479,11 @@ impl EscrowContract {
         }
 
         if !m.player1_deposited || !m.player2_deposited {
+            // Invariant: Active state implies both players have deposited.
+            // This check is a defensive guard — it should never be reached because
+            // the match can only transition to Active once both deposits are confirmed.
+            // It is retained to prevent any future refactor from inadvertently allowing
+            // a payout on a match where funds were never fully escrowed.
             return Err(Error::NotFunded);
         }
 
