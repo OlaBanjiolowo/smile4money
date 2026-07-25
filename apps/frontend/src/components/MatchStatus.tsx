@@ -3,6 +3,9 @@ import { Networks, rpc } from '@stellar/stellar-sdk';
 
 type MatchState = 'Pending' | 'Active' | 'PendingResult' | 'Completed' | 'Cancelled';
 
+/** Reason a match entered the Cancelled terminal state. */
+type CancellationReason = 'cancelled_by_player' | 'timed_out';
+
 interface MatchData {
   id: string;
   state: MatchState;
@@ -13,6 +16,14 @@ interface MatchData {
   platform: 'lichess' | 'chesscom';
   gameId: string;
   winner?: 'Player1' | 'Player2' | 'Draw';
+  /** Which player cancelled the match (Stellar address), if applicable. */
+  cancelledBy?: string;
+  /** How the match was cancelled: by a player or via the timeout mechanism. */
+  cancellationReason?: CancellationReason;
+  /** Whether player1 had already deposited before cancellation. */
+  player1Deposited?: boolean;
+  /** Whether player2 had already deposited before cancellation. */
+  player2Deposited?: boolean;
 }
 
 interface MatchStatusProps {
@@ -217,15 +228,60 @@ export function MatchStatus({
           </div>
         );
 
-      case 'Cancelled':
+      case 'Cancelled': {
+        const isTimedOut = matchData.cancellationReason === 'timed_out';
+        const cancelledByAddress = matchData.cancelledBy;
+
+        let cancellationDetail: string;
+        if (isTimedOut) {
+          cancellationDetail =
+            'The match timed out because the oracle did not submit a result within the allowed window.';
+        } else if (cancelledByAddress) {
+          const isP1 = cancelledByAddress === matchData.player1;
+          const canceller = isP1 ? 'Player 1' : 'Player 2';
+          cancellationDetail = `This match was cancelled by ${canceller} (${cancelledByAddress.slice(0, 4)}...${cancelledByAddress.slice(-4)}).`;
+        } else {
+          cancellationDetail = 'This match has been cancelled.';
+        }
+
+        const p1Refunded = matchData.player1Deposited ?? false;
+        const p2Refunded = matchData.player2Deposited ?? false;
+        const anyRefund = p1Refunded || p2Refunded;
+
         return (
           <div className="state-content cancelled" data-testid="state-cancelled">
             <h3 className="state-title">Cancelled</h3>
-            <p className="state-description">
-              This match has been cancelled. Any deposited stakes have been refunded.
+            <p
+              className="state-description"
+              data-testid={isTimedOut ? 'cancel-reason-timeout' : 'cancel-reason-player'}
+            >
+              {cancellationDetail}
             </p>
+            {anyRefund && (
+              <div className="refund-info" data-testid="refund-info">
+                <p className="refund-title">Refunds issued:</p>
+                <ul className="refund-list">
+                  {p1Refunded && (
+                    <li data-testid="refund-player1">
+                      Player 1 refunded {matchData.stakeAmount} {matchData.token.toUpperCase()}
+                    </li>
+                  )}
+                  {p2Refunded && (
+                    <li data-testid="refund-player2">
+                      Player 2 refunded {matchData.stakeAmount} {matchData.token.toUpperCase()}
+                    </li>
+                  )}
+                </ul>
+              </div>
+            )}
+            {!anyRefund && (
+              <p className="no-refund" data-testid="no-refund-info">
+                No stakes were deposited; no refunds were necessary.
+              </p>
+            )}
           </div>
         );
+      }
     }
   };
 

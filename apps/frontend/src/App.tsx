@@ -1,4 +1,7 @@
-import React, { lazy, Suspense } from 'react';
+import { ClaimBurn } from './components/claim-burn';
+import { NetworkBadge } from './components/NetworkBadge';
+import { History } from './pages/History';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { useStellarWallet } from './hooks/useStellarWallet';
 import { useTheme } from './hooks/useTheme';
 import type { WalletStatus } from './types';
@@ -123,13 +126,7 @@ export function App() {
   };
 
   return (
-    <Suspense
-      fallback={
-        <div className="flex min-h-screen items-center justify-center bg-gray-100 dark:bg-slate-950">
-          <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-300 border-t-slate-700" />
-        </div>
-      }
-    >
+    <ErrorBoundary>
       <main className="dark:bg-slate-950 dark:text-slate-100 min-h-screen bg-gray-100 px-4 py-6 text-slate-900 transition-colors">
         <div className="mx-auto mb-4 flex max-w-2xl items-center justify-between">
           <NetworkBadge />
@@ -154,6 +151,7 @@ export function App() {
               publicKey={address}
               balance={balance}
               expectedNetwork="testnet"
+              network={network}
             />
           </div>
           <div>
@@ -161,6 +159,6 @@ export function App() {
           </div>
         </div>
       </main>
-    </Suspense>
+    </ErrorBoundary>
   );
 }

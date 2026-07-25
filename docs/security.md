@@ -201,6 +201,26 @@ No single party can unilaterally steal funds. The escrow contract enforces all p
 
 **Mitigation**: `create_match` checks `player1 != player2` and returns `Error::InvalidPlayers` on violation.
 
+### Contract Addresses as Players (Re-entrancy via Malicious Player Contract)
+
+**Threat**: A player registers the address of a *malicious smart contract* as `player1` or `player2` with the intent of re-entering the escrow during token transfers (Solidity/EVM-style re-entrancy) or of mounting some other cross-contract confused-deputy attack on the escrow.
+
+**Is this a real risk under Soroban? — No.**
+
+Soroban's execution model structurally prevents the two classic contract-player attacks that apply to EVM chains:
+
+1. **No synchronous re-entrancy / callbacks.** When the escrow calls `token::transfer` → `player`, the runtime does **not** yield execution back to a contract player. Token SAC contracts (`soroban_sdk::token`) perform a pure host-side ledger balance update; they invoke no user-supplied code. Even if player was backed by a wasm contract with a custom `receive`/`fallback` (which Soroban does **not** have for SAC tokens — the SAC is a host primitive), Soroban enforces that an already-executing contract cannot be re-entered within the same host frame: any nested invocation is simply a new, isolated frame that cannot mutate the escrow's state mid-flight.
+
+2. **No confused-deputy token approvals.** The escrow transfers tokens *from itself* to `player1`/`player2` at payout time. It never holds a `transferFrom` allowance granted by `player` that a player-contract could trick it into spending on some 3rd party (the direction is always `contract → player`, never `player → contract` on the payout path, and the inbound `deposit` path is `player → contract` with the player's own explicit `token.approve`).
+
+The concrete mitigations that apply regardless are:
+
+- **`player.require_auth()` is enforced** for every player-gated function (`create_match`, `deposit`, `cancel_match`, `claim_timeout`). For a contract address, `require_auth` is satisfied *only* by the contract submitting a Soroban-level auth entry — i.e. the contract itself (its wasm code) must willingly authorise the call. There is no way for a passive player-contract to be "tricked" into having someone else spend its allowance on its behalf.
+- **State transitions are guarded by `MatchState`.** Once a payout has been validated and the match moves to `Completed`/`Cancelled`, no further state change is possible regardless of what a player-address is.
+- **Escrow never invokes the player address directly.** All cross-contract calls go to the SAC token, never to `player1` / `player2`.
+
+**Documentation verdict**: Accepted as explicitly non-risk under the Soroban execution model. No on-chain guard restricting players to classic `G…` Stellar addresses is warranted, because such a restriction would merely disable legitimate use-cases (e.g. a multi-sig vault contract being used as the player's address) without adding any security benefit in a protocol where re-entrancy is structurally impossible. See `test_contract_address_as_player_completes_full_lifecycle` in `contracts/escrow/src/tests.rs`, which exercises create → deposit × 2 → result submission with registered contract addresses as both players to confirm the behaviour end-to-end.
+
 ### Storage Expiry
 
 **Threat**: A persistent `Match` entry expires mid-game, causing `MatchNotFound` errors.
@@ -279,7 +299,7 @@ Both contracts follow the checks-effects-interactions pattern as an additional l
 
 ### Conclusion
 
-No re-entrancy vectors exist in this codebase. The Soroban execution model provides structural prevention, and the code additionally follows checks-effects-interactions ordering.
+No re-entrancy vectors exist in this codebase. The Soroban execution model provides structural prevention, and the code additionally follows checks-effects-interactions ordering. Player addresses may be contract addresses (e.g. multi-sig vaults) without introducing any new re-entrancy or confused-deputy risk; see "Contract Addresses as Players" in the per-function mitigations section above.
 
 ---
 

@@ -1,6 +1,7 @@
 extern crate std;
 use super::*;
 use soroban_sdk::{
+    contract, contractimpl,
     testutils::{
         storage::Instance as _,
         storage::Persistent as _,
@@ -29,6 +30,13 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&oracle, &admin, &token_addr);
+
+    // Fund the contract with the required reserve buffer.
+    // `ensure_reserve_for_payout` requires the post-payout balance to stay
+    // above ESCROW_RESERVE_BUFFER_STROOPS (1.5 XLM worth of stroops). Without
+    // this top-up, every payout-style test leaving the contract at a near-zero
+    // balance would fail with Error::InsufficientReserve.
+    asset_client.mint(&contract_id, &crate::ESCROW_RESERVE_BUFFER_STROOPS);
 
     // Approve the escrow contract for both players (needed for allowance check)
     let expiration = env.ledger().sequence() + 1000000;
@@ -377,6 +385,9 @@ fn test_cancel_with_both_deposits_requires_both_auth() {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&oracle, &admin, &token_addr);
+
+    // Fund reserve buffer (matches setup() helper — see ensure_reserve_for_payout)
+    asset_client.mint(&contract_id, &crate::ESCROW_RESERVE_BUFFER_STROOPS);
 
     // Approve the escrow contract for both players
     let expiration = env.ledger().sequence() + 1000000;
@@ -1730,6 +1741,35 @@ fn test_submit_result_on_cancelled_match_fails() {
     );
 }
 
+// Issue #1124 — Explicit test: second deposit for the same player returns AlreadyFunded.
+//
+// The AlreadyFunded invariant is enforced independently for each player.
+// This test documents the expected behaviour for player2 so the idempotency
+// guarantee is visible for both participants.
+#[test]
+fn test_second_deposit_player2_returns_already_funded() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "already_funded_p2"),
+        &Platform::Lichess,
+    );
+
+    // Player2 deposits successfully
+    client.deposit(&id, &player2);
+    // Second call from the same player must be rejected
+    assert_eq!(
+        client.try_deposit(&id, &player2),
+        Err(Ok(Error::AlreadyFunded)),
+        "second deposit for player2 must return AlreadyFunded"
+    );
+}
+
 // Issue #33: Already-deposited player cannot deposit again
 #[test]
 fn test_double_deposit_same_player_fails() {
@@ -2130,7 +2170,9 @@ fn test_emergency_drain_succeeds_when_paused() {
     );
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    assert_eq!(token_client.balance(&contract_id), 200);
+    // Total contract balance = stakes (200) + reserve buffer (15_000_000) minted in setup()
+    let total_expected = 200 + crate::ESCROW_RESERVE_BUFFER_STROOPS;
+    assert_eq!(token_client.balance(&contract_id), total_expected);
 
     client.pause();
 
@@ -2141,7 +2183,7 @@ fn test_emergency_drain_succeeds_when_paused() {
     let events = env.events().all();
 
     assert_eq!(token_client.balance(&contract_id), 0);
-    assert_eq!(token_client.balance(&safe), 200);
+    assert_eq!(token_client.balance(&safe), total_expected);
 
     // Verify drain event
     let drain_event = events.iter().find(|(_, t, _)| {
@@ -2261,4 +2303,333 @@ fn test_instance_ttl_extended_on_initialize() {
 
     let instance_ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
     assert!(instance_ttl >= crate::INSTANCE_LIFETIME_THRESHOLD);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Issue #1122 — Property-based tests for state machine transition invariants
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// These tests use proptest to generate exhaustive random call sequences and
+// assert that any operation issued in the wrong state is always rejected with
+// `Error::InvalidState`, `Error::MatchCancelled`, or `Error::MatchCompleted`,
+// ensuring the state machine cannot be subverted.
+//
+// Because proptest requires `std` and the contract is `#![no_std]`, the
+// property tests live in a separate sub-module gated on the `testutils`
+// feature.  They import the contract types directly and drive the standard
+// `EscrowContractClient` provided by the SDK.
+
+#[cfg(test)]
+mod proptest_state_machine {
+    extern crate std;
+
+    use super::*;
+    use proptest::prelude::*;
+    use soroban_sdk::{
+        testutils::Address as _,
+        token::{Client as TokenClient, StellarAssetClient},
+        Address, Env, String,
+    };
+
+    // ── helpers ─────────────────────────────────────────────────────────────
+
+    /// Build a minimal environment with the escrow contract initialised.
+    fn prop_setup() -> (Env, Address, Address, Address, Address, Address, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let player1 = Address::generate(&env);
+        let player2 = Address::generate(&env);
+
+        let token_id = env.register_stellar_asset_contract_v2(admin.clone());
+        let token_addr = token_id.address();
+        let asset_client = StellarAssetClient::new(&env, &token_addr);
+        asset_client.mint(&player1, &1_000);
+        asset_client.mint(&player2, &1_000);
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        client.initialize(&oracle, &admin, &token_addr);
+
+        let expiration = env.ledger().sequence() + 1_000_000;
+        let token_client = TokenClient::new(&env, &token_addr);
+        token_client.approve(&player1, &contract_id, &1_000, &expiration);
+        token_client.approve(&player2, &contract_id, &1_000, &expiration);
+
+        (env, contract_id, oracle, player1, player2, token_addr, admin)
+    }
+
+    // ── invariant 1: Completed is terminal ──────────────────────────────────
+
+    /// After a match reaches the `Completed` state any subsequent call to
+    /// `deposit`, `cancel_match`, or `submit_result` must return an error —
+    /// never silently succeed.
+    ///
+    /// We parametrise over which player wins so proptest can cover all three
+    /// `Winner` variants across many runs.
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(20))]
+
+        #[test]
+        fn prop_completed_is_terminal(winner_idx in 0usize..3) {
+            let (env, contract_id, oracle, player1, player2, token, _admin) = prop_setup();
+            let client = EscrowContractClient::new(&env, &contract_id);
+
+            let winners = [Winner::Player1, Winner::Player2, Winner::Draw];
+            let winner = winners[winner_idx].clone();
+
+            let id = client.create_match(
+                &player1,
+                &player2,
+                &100,
+                &token,
+                &String::from_str(&env, "prop-completed"),
+                &Platform::Lichess,
+            );
+            client.deposit(&id, &player1);
+            client.deposit(&id, &player2);
+
+            // Drive to PendingResult then advance past dispute window
+            client.submit_result(&id, &String::from_str(&env, "prop-completed"), &winner, &oracle);
+            // Advance ledger past the dispute window
+            env.ledger().set_sequence_number(env.ledger().sequence() + 17_281);
+            client.finalize_result(&id);
+
+            // After Completed: every mutating call must be rejected
+            assert_eq!(
+                client.get_match(&id).state,
+                MatchState::Completed,
+                "expected Completed state"
+            );
+
+            // deposit is rejected
+            let deposit_result = client.try_deposit(&id, &player1);
+            prop_assert!(
+                deposit_result.is_err(),
+                "deposit on Completed match must be rejected"
+            );
+
+            // cancel_match is rejected
+            let cancel_result = client.try_cancel_match(&id, &player1);
+            prop_assert!(
+                cancel_result.is_err(),
+                "cancel_match on Completed match must be rejected"
+            );
+
+            // submit_result is rejected
+            let submit_result = client.try_submit_result(
+                &id,
+                &String::from_str(&env, "prop-completed"),
+                &Winner::Player1,
+                &oracle,
+            );
+            prop_assert!(
+                submit_result.is_err(),
+                "submit_result on Completed match must be rejected"
+            );
+        }
+    }
+
+    // ── invariant 2: Cancelled is terminal ──────────────────────────────────
+
+    /// After a match reaches the `Cancelled` state any subsequent call to
+    /// `deposit`, `cancel_match`, or `submit_result` must return an error.
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(20))]
+
+        #[test]
+        fn prop_cancelled_is_terminal(cancel_with_deposit in proptest::bool::ANY) {
+            let (env, contract_id, oracle, player1, player2, token, _admin) = prop_setup();
+            let client = EscrowContractClient::new(&env, &contract_id);
+
+            let id = client.create_match(
+                &player1,
+                &player2,
+                &100,
+                &token,
+                &String::from_str(&env, "prop-cancelled"),
+                &Platform::Lichess,
+            );
+
+            if cancel_with_deposit {
+                client.deposit(&id, &player1);
+            }
+            client.cancel_match(&id, &player1);
+
+            assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+
+            // deposit is rejected
+            let deposit_result = client.try_deposit(&id, &player1);
+            prop_assert!(
+                deposit_result.is_err(),
+                "deposit on Cancelled match must be rejected"
+            );
+
+            // cancel_match is rejected
+            let cancel_result = client.try_cancel_match(&id, &player1);
+            prop_assert!(
+                cancel_result.is_err(),
+                "cancel_match on Cancelled match must be rejected"
+            );
+
+            // submit_result is rejected
+            let submit_result = client.try_submit_result(
+                &id,
+                &String::from_str(&env, "prop-cancelled"),
+                &Winner::Player1,
+                &oracle,
+            );
+            prop_assert!(
+                submit_result.is_err(),
+                "submit_result on Cancelled match must be rejected"
+            );
+        }
+    }
+
+    // ── invariant 3: Active → only valid exit is submit_result ───────────────
+
+    /// Once a match is `Active` (both players deposited), `cancel_match` must
+    /// always be rejected with `InvalidState` — the only valid exit from Active
+    /// is through the oracle path.
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(20))]
+
+        #[test]
+        fn prop_active_cancel_always_rejected(cancel_caller_is_p1 in proptest::bool::ANY) {
+            let (env, contract_id, _oracle, player1, player2, token, _admin) = prop_setup();
+            let client = EscrowContractClient::new(&env, &contract_id);
+
+            let id = client.create_match(
+                &player1,
+                &player2,
+                &100,
+                &token,
+                &String::from_str(&env, "prop-active-cancel"),
+                &Platform::Lichess,
+            );
+            client.deposit(&id, &player1);
+            client.deposit(&id, &player2);
+
+            assert_eq!(client.get_match(&id).state, MatchState::Active);
+
+            let caller = if cancel_caller_is_p1 { &player1 } else { &player2 };
+            let result = client.try_cancel_match(&id, caller);
+
+            prop_assert_eq!(
+                result,
+                Err(Ok(Error::InvalidState)),
+                "cancel_match on Active match must return InvalidState"
+            );
+        }
+    }
+
+    // ── invariant 4: submit_result only valid from Active ────────────────────
+
+    /// `submit_result` must return `InvalidState` when called on a match that
+    /// is in `Pending` or `Cancelled` state (covers non-Active starting states
+    /// via proptest).
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(20))]
+
+        #[test]
+        fn prop_submit_result_only_valid_from_active(
+            depositor_idx in 0usize..3,  // 0 = none, 1 = p1 only, 2 = p2 only
+        ) {
+            let (env, contract_id, oracle, player1, player2, token, _admin) = prop_setup();
+            let client = EscrowContractClient::new(&env, &contract_id);
+
+            // Use unique game IDs per run to avoid DuplicateGameId across repeated
+            // proptest cases within the same process.  We embed depositor_idx in
+            // the ID to ensure uniqueness.
+            let raw: &str = match depositor_idx {
+                0 => "prop-submit-none",
+                1 => "prop-submit-p1",
+                _ => "prop-submit-p2",
+            };
+            let game_id = String::from_str(&env, raw);
+
+            let id = client.create_match(
+                &player1,
+                &player2,
+                &100,
+                &token,
+                &game_id,
+                &Platform::Lichess,
+            );
+
+            match depositor_idx {
+                1 => { client.deposit(&id, &player1); }
+                2 => { client.deposit(&id, &player2); }
+                _ => {}
+            }
+
+            // Match is Pending (not Active) — submit_result must be rejected
+            let result = client.try_submit_result(
+                &id,
+                &game_id,
+                &Winner::Player1,
+                &oracle,
+            );
+            prop_assert!(
+                result.is_err(),
+                "submit_result must be rejected when match is not Active"
+            );
+            // Must be InvalidState, not some other error
+            prop_assert_eq!(
+                result,
+                Err(Ok(Error::InvalidState)),
+                "submit_result on non-Active match must return InvalidState"
+            );
+        }
+    }
+
+    // ── invariant 5: no operation accepted after terminal state ───────────────
+
+    /// Comprehensive sweep: for every reachable terminal state, assert that
+    /// ALL mutating operations are rejected.  This catches any future addition
+    /// to the API that might forget to guard against terminal states.
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(10))]
+
+        #[test]
+        fn prop_no_operation_accepted_in_terminal_state(
+            reach_completed in proptest::bool::ANY,
+        ) {
+            let (env, contract_id, oracle, player1, player2, token, _admin) = prop_setup();
+            let client = EscrowContractClient::new(&env, &contract_id);
+
+            let (game_str, terminal_state) = if reach_completed {
+                ("prop-terminal-completed", MatchState::Completed)
+            } else {
+                ("prop-terminal-cancelled", MatchState::Cancelled)
+            };
+            let game_id = String::from_str(&env, game_str);
+
+            let id = client.create_match(
+                &player1, &player2, &100, &token, &game_id, &Platform::Lichess,
+            );
+
+            if reach_completed {
+                client.deposit(&id, &player1);
+                client.deposit(&id, &player2);
+                client.submit_result(&id, &game_id, &Winner::Player1, &oracle);
+                env.ledger().set_sequence_number(env.ledger().sequence() + 17_281);
+                client.finalize_result(&id);
+            } else {
+                client.cancel_match(&id, &player1);
+            }
+
+            prop_assert_eq!(client.get_match(&id).state, terminal_state);
+
+            // Every mutating entry-point must be rejected
+            prop_assert!(client.try_deposit(&id, &player1).is_err());
+            prop_assert!(client.try_cancel_match(&id, &player1).is_err());
+            prop_assert!(
+                client.try_submit_result(&id, &game_id, &Winner::Player1, &oracle).is_err()
+            );
+            prop_assert!(client.try_finalize_result(&id).is_err());
+        }
+    }
 }

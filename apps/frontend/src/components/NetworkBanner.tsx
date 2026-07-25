@@ -1,9 +1,6 @@
 import React from 'react';
 
-const EXPECTED_NETWORK =
-  (typeof import.meta !== 'undefined' &&
-    (import.meta as { env?: { VITE_STELLAR_NETWORK?: string } }).env?.VITE_STELLAR_NETWORK) ||
-  'testnet';
+const EXPECTED_NETWORK = import.meta.env.VITE_STELLAR_NETWORK ?? 'testnet';
 
 interface NetworkBannerProps {
   walletNetwork: string | null;

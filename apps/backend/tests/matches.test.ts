@@ -1,8 +1,12 @@
 import request from 'supertest';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import express from 'express';
 import matchRouter from '../src/routes/matches.js';
 import jwt from 'jsonwebtoken';
+import axios from 'axios';
+
+vi.mock('axios');
+const mockedAxios = vi.mocked(axios);
 
 const secret = 'test-secret';
 const makeToken = (address = 'GPLAYER1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA') =>
@@ -15,10 +19,53 @@ const createApp = () => {
   return app;
 };
 
+const BASE_LICHESS_GAME = {
+  id: 'lichess-game-abc123',
+  status: 'mate',
+  winner: 'white',
+  players: {
+    white: { user: { name: 'alice' } },
+    black: { user: { name: 'bob' } },
+  },
+};
+
+function mockLichessGameFound(gameId: string) {
+  mockedAxios.get = vi.fn().mockImplementation(async (url: string) => {
+    if (typeof url === 'string' && url.includes('lichess.org') && url.includes(gameId)) {
+      return { status: 200, data: { ...BASE_LICHESS_GAME, id: gameId } };
+    }
+    return { status: 404, data: {} };
+  });
+}
+
+function mockChessGameFound(username: string, gameId: string) {
+  mockedAxios.get = vi.fn().mockImplementation(async (url: string) => {
+    if (typeof url === 'string' && url.includes('chess.com') && url.includes(username)) {
+      return {
+        status: 200,
+        data: {
+          games: [
+            {
+              url: `https://www.chess.com/game/live/${gameId}`,
+              pgn: '',
+              time_control: '600',
+              end_time: 0,
+              white: { username, result: 'win' },
+              black: { username: 'bob', result: 'resigned' },
+            },
+          ],
+        },
+      };
+    }
+    return { status: 404, data: {} };
+  });
+}
+
 describe('POST /api/matches', () => {
   let app: express.Express;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     app = createApp();
   });
 
@@ -36,6 +83,7 @@ describe('POST /api/matches', () => {
   });
 
   it('returns 400 when player2 is missing', async () => {
+    mockLichessGameFound('lichess-game-abc123');
     const response = await request(app)
       .post('/api/matches')
       .set('Authorization', `Bearer ${makeToken()}`)
@@ -44,6 +92,7 @@ describe('POST /api/matches', () => {
   });
 
   it('returns 400 when stakeAmount is missing', async () => {
+    mockLichessGameFound('lichess-game-abc123');
     const response = await request(app)
       .post('/api/matches')
       .set('Authorization', `Bearer ${makeToken()}`)
@@ -52,6 +101,7 @@ describe('POST /api/matches', () => {
   });
 
   it('returns 400 when stakeAmount is zero', async () => {
+    mockLichessGameFound('lichess-game-abc123');
     const response = await request(app)
       .post('/api/matches')
       .set('Authorization', `Bearer ${makeToken()}`)
@@ -76,6 +126,7 @@ describe('POST /api/matches', () => {
   });
 
   it('returns 201 and matches created payload shape', async () => {
+    mockLichessGameFound('lichess-game-abc123');
     const response = await request(app)
       .post('/api/matches')
       .set('Authorization', `Bearer ${makeToken()}`)
@@ -93,6 +144,7 @@ describe('POST /api/matches', () => {
   });
 
   it('returns 409 for duplicate gameId', async () => {
+    mockLichessGameFound('lichess-game-abc123');
     const token = makeToken();
     await request(app)
       .post('/api/matches')
@@ -105,5 +157,47 @@ describe('POST /api/matches', () => {
       .send({ player2: 'GPLAYER3CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC', stakeAmount: 100, token: 'XLM', gameId: 'lichess-game-abc123', platform: 'lichess' });
 
     expect(response.status).toBe(409);
+  });
+
+  it('returns 400 with Invalid game when lichess game does not exist', async () => {
+    mockedAxios.get = vi.fn().mockResolvedValue({ status: 404, data: {} });
+    const response = await request(app)
+      .post('/api/matches')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ player2: 'GPLAYER2BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB', stakeAmount: 100, token: 'XLM', gameId: 'nonexistent-game', platform: 'lichess' });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('Invalid game');
+    expect(response.body.details).toBeDefined();
+  });
+
+  it('returns 400 with Invalid game when chessdotcom is missing username', async () => {
+    const response = await request(app)
+      .post('/api/matches')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ player2: 'GPLAYER2BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB', stakeAmount: 100, token: 'XLM', gameId: 'chess-game-1', platform: 'chessdotcom' });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('Invalid game');
+    expect(response.body.details).toContain('username is required');
+  });
+
+  it('returns 201 for chessdotcom when username provided and game exists', async () => {
+    mockChessGameFound('alice', 'chess-game-1');
+    const response = await request(app)
+      .post('/api/matches')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({
+        player2: 'GPLAYER2BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+        stakeAmount: 100,
+        token: 'XLM',
+        gameId: 'chess-game-1',
+        platform: 'chessdotcom',
+        username: 'alice',
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.gameId).toBe('chess-game-1');
+    expect(response.body.platform).toBe('chessdotcom');
   });
 });

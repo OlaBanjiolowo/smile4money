@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import type { WalletStatus } from '../types';
+import type { WalletStatus, Network } from '../types';
 import { useDebounce } from '../hooks/useDebounce';
 import { useToast } from './Toast';
 import { TxHash } from './TxHash';
@@ -26,6 +26,8 @@ interface ClaimBurnProps {
   balance?: string | null;
   expectedNetwork?: string;
   tokenSymbol?: string;
+  /** Current wallet network — used to build Stellar Expert explorer links. */
+  network?: Network;
 }
 
 function isValidAmount(value: string): boolean {
@@ -45,6 +47,7 @@ export function ClaimBurn({
   balance,
   expectedNetwork = 'testnet',
   tokenSymbol = 'XLM',
+  network = 'unknown',
 }: ClaimBurnProps) {
   const [mode, setMode] = useState<Mode>('claim');
   const [inputAmount, setInputAmount] = useState('');
@@ -508,12 +511,16 @@ export function ClaimBurn({
             ? `${tokenSymbol} claimed successfully!`
             : `${tokenSymbol} burned successfully!`}
           {txHash && (
-            <span
-              className="dark:text-violet-400 mt-2 block break-all font-mono text-xs text-violet-600"
+            <a
+              href={`https://stellar.expert/explorer/${network === 'unknown' ? 'testnet' : network}/tx/${txHash}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="dark:text-violet-400 mt-2 block break-all font-mono text-xs text-violet-600 underline hover:no-underline"
               data-testid="tx-hash"
+              aria-label={`View transaction ${txHash} on Stellar Expert`}
             >
-              {txHash.slice(0, 8)}…{txHash.slice(-8)}
-            </span>
+              {txHash.slice(0, 8)}…{txHash.slice(-8)} ↗
+            </a>
           )}
         </p>
       )}

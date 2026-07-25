@@ -1,6 +1,6 @@
 # Security Policy
 
-## How to Report a Vulnerability
+## Responsible Disclosure Contact
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
@@ -10,9 +10,9 @@ Use one of the following private disclosure channels:
    [Security Advisories](../../security/advisories/new) tab of this repository and
    open a draft advisory. This keeps all communication private and lets us
    coordinate a fix before public disclosure.
-2. **Email**: Send full details to the address listed in the GitHub organisation
-   profile. Encrypt the message with our PGP key if the disclosure contains
-   exploit code or proof-of-concept.
+2. **Email**: Send full details to **security@smile4money.io**. Encrypt the message
+   with our PGP key (published in the GitHub organisation profile) if the disclosure
+   contains exploit code or a proof-of-concept.
 
 Please include:
 - A clear description of the vulnerability and its potential impact.
@@ -52,14 +52,16 @@ case-by-case for Critical severity findings at the maintainers' discretion.
 
 ## In-Scope Components
 
-The following components are in scope for vulnerability reports:
+The following components and vulnerability classes are in scope for vulnerability reports:
 
-| Component                     | Location                          |
-|-------------------------------|-----------------------------------|
-| Escrow smart contract         | `contracts/escrow/src/`           |
-| Oracle smart contract         | `contracts/oracle/src/`           |
-| Off-chain oracle service      | `apps/backend/`                   |
-| Frontend dApp                 | `apps/frontend/`                  |
+| Component | Location | Example vulnerability classes |
+|-----------|----------|-------------------------------|
+| Escrow smart contract | `contracts/escrow/src/` | Fund theft, state machine bypass, integer overflow, reentrancy-like patterns, unauthorised access to admin/oracle functions |
+| Oracle smart contract | `contracts/oracle/src/` | Result forgery, replay attacks, unauthorised result submission or overwrite |
+| Contract registry | `contracts/contract-registry/src/` | Unauthorised registration/deregistration, max-events bypass |
+| Off-chain oracle service | `apps/backend/` | Oracle key compromise path, result manipulation, API injection that alters reported game outcomes |
+| Frontend dApp | `apps/frontend/` | Cross-site scripting (XSS), wallet-draining transaction crafting, phishing via UI manipulation |
+| Deployment scripts | `scripts/` | Secret leakage, supply-chain tampering with WASM artifacts |
 
 ---
 

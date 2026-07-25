@@ -86,6 +86,69 @@ has_result(match_id: u64) -> bool
 - The escrow contract independently verifies the caller against its stored oracle address before executing any payout.
 - The oracle contract and escrow contract are separate deployments; a compromised oracle contract does not grant direct access to escrow funds.
 
+## Polling Interval and Job Scheduling
+
+### Polling interval
+
+The off-chain oracle service polls the chess platform API once every **30 seconds** per active
+match. On each poll it checks whether the game has reached a terminal state (win, loss, or draw).
+Once a terminal result is detected the service immediately submits the result on-chain and
+stops polling for that match.
+
+```
+while game not finished:
+    sleep 30 s
+    result = chess_api.get_game(game_id)
+    if result.status in [win, draw, aborted]:
+        break
+
+oracle_contract.submit_result(...)
+escrow_contract.submit_result(...)
+```
+
+### Retry policy
+
+Transient failures (network timeouts, API rate-limit 429 responses, Soroban RPC errors) are
+retried with **exponential backoff**:
+
+| Attempt | Delay before retry |
+|---------|-------------------|
+| 1st retry | 5 s |
+| 2nd retry | 10 s |
+| 3rd retry | 20 s |
+| 4th retry | 40 s |
+| 5th+ retry | 60 s (capped) |
+
+After **10 consecutive failures** for the same match, the job is placed into a dead-letter queue
+and an alert is raised. The match remains `Active` on-chain; players retain the ability to call
+`claim_timeout` once the timeout window elapses (see below).
+
+Duplicate-submission errors (`Error::AlreadySubmitted` from the oracle contract,
+`Error::InvalidState` from the escrow contract) are treated as successful and cause the job to
+stop immediately — they indicate a race where a result was already recorded.
+
+### Relationship to `TIMEOUT_LEDGERS`
+
+`TIMEOUT_LEDGERS` is set to **120 960 ledgers** (≈ 7 days at 5 s/ledger). This constant
+represents the on-chain safety net: if the oracle never submits a result within that window,
+either player can call `claim_timeout` to recover their stake.
+
+The polling service is designed to resolve matches **well within** this window:
+
+- Polling every 30 s means a finished game is detected within 30 s of completion.
+- Chess games on Lichess and Chess.com have enforced time controls; no standard game exceeds a
+  few hours.
+- The 7-day window is a guard against **oracle service downtime**, not against slow games. If
+  the oracle service is offline for the full 7-day window, `claim_timeout` provides a trustless
+  escape hatch without relying on the operator to intervene.
+
+Configure the polling interval via `.env` (default: 30 s):
+
+```env
+ORACLE_POLL_INTERVAL_SECS=30
+ORACLE_MAX_RETRIES=10
+```
+
 ## Configuration
 
 Set the oracle admin key in `.env`:
