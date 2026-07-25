@@ -279,15 +279,16 @@ pub struct Match {
 /// All contract state is accessed through these keys. The variants map to
 /// different storage tiers:
 ///
-/// | Key variant      | Storage tier | Description                                  |
-/// |------------------|--------------|----------------------------------------------|
-/// | `Match(u64)`     | Persistent   | Full [`Match`] record, keyed by match ID     |
-/// | `MatchCount`     | Instance     | Running counter used to assign match IDs     |
-/// | `Oracle`         | Instance     | Address of the trusted oracle contract       |
-/// | `Admin`          | Instance     | Address of the contract administrator        |
-/// | `Paused`         | Instance     | Boolean pause flag                           |
-/// | `Token`          | Instance     | Default SEP-41 token address                 |
-/// | `GameId(String)` | Persistent   | Deduplication index: game_id → match ID      |
+/// | Key variant        | Storage tier | Description                                  |
+/// |--------------------|--------------|----------------------------------------------|
+/// | `Match(u64)`       | Persistent   | Full [`Match`] record, keyed by match ID     |
+/// | `MatchCount`       | Instance     | Running counter used to assign match IDs     |
+/// | `Oracle`           | Instance     | Address of the trusted oracle contract       |
+/// | `Admin`            | Instance     | Address of the contract administrator        |
+/// | `Paused`           | Instance     | Boolean pause flag                           |
+/// | `Token`            | Instance     | Default SEP-41 token address                 |
+/// | `SafeAddress`      | Instance     | Pre-registered destination for emergency_drain |
+/// | `GameId(String)`   | Persistent   | Deduplication index: game_id → match ID      |
 ///
 /// Instance-tier keys share the contract's instance TTL. Persistent-tier keys
 /// have their own TTL extended to `MATCH_TTL_LEDGERS` on every write.
@@ -342,6 +343,15 @@ pub enum DataKey {
     /// per-match tokens are supported in future versions.
     /// Stored in **instance** storage.
     Token,
+
+    /// The pre-registered destination address for [`emergency_drain`](crate::EscrowContract::emergency_drain).
+    ///
+    /// Set immutably during [`initialize`](crate::EscrowContract::initialize).
+    /// `emergency_drain` always transfers funds to this address — it cannot
+    /// be overridden at call time. This eliminates the rug-pull vector where
+    /// a compromised admin key could redirect the drain to an arbitrary address.
+    /// Stored in **instance** storage.
+    SafeAddress,
 
     /// Deduplication index mapping a `game_id` string to its match ID.
     ///

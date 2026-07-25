@@ -28,8 +28,8 @@ use soroban_sdk::{
 /// Spin up a fresh environment with two players, a token, and an initialised
 /// escrow contract.  Each player starts with 1 000 tokens.
 ///
-/// Returns `(env, contract_id, oracle, player1, player2, token_addr, admin)`.
-fn setup_e2e() -> (Env, Address, Address, Address, Address, Address, Address) {
+/// Returns `(env, contract_id, oracle, player1, player2, token_addr, admin, safe_address)`.
+fn setup_e2e() -> (Env, Address, Address, Address, Address, Address, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -37,6 +37,7 @@ fn setup_e2e() -> (Env, Address, Address, Address, Address, Address, Address) {
     let oracle = Address::generate(&env);
     let player1 = Address::generate(&env);
     let player2 = Address::generate(&env);
+    let safe_address = Address::generate(&env);
 
     let token_id = env.register_stellar_asset_contract_v2(admin.clone());
     let token_addr = token_id.address();
@@ -46,7 +47,7 @@ fn setup_e2e() -> (Env, Address, Address, Address, Address, Address, Address) {
 
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.initialize(&oracle, &admin, &token_addr);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address);
 
     // Approve the escrow contract for both players (needed for allowance check)
     let expiration = env.ledger().sequence() + 1000000;
@@ -62,6 +63,7 @@ fn setup_e2e() -> (Env, Address, Address, Address, Address, Address, Address) {
         player2,
         token_addr,
         admin,
+        safe_address,
     )
 }
 
@@ -73,7 +75,7 @@ fn setup_e2e() -> (Env, Address, Address, Address, Address, Address, Address) {
 /// Player1 wins -> verify balances, state, escrow balance, and events.
 #[test]
 fn test_e2e_lifecycle_player1_wins() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup_e2e();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup_e2e();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -165,7 +167,7 @@ fn test_e2e_lifecycle_player1_wins() {
 /// Same lifecycle but the oracle declares Player 2 the winner.
 #[test]
 fn test_e2e_lifecycle_player2_wins() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup_e2e();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup_e2e();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -228,7 +230,7 @@ fn test_e2e_lifecycle_player2_wins() {
 /// Same lifecycle but the oracle declares a draw; both players are refunded.
 #[test]
 fn test_e2e_lifecycle_draw() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup_e2e();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup_e2e();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -295,7 +297,7 @@ fn test_e2e_lifecycle_draw() {
 /// that each match payout is isolated.
 #[test]
 fn test_e2e_all_three_outcomes_sequential() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup_e2e();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup_e2e();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -390,7 +392,7 @@ fn test_e2e_all_three_outcomes_sequential() {
 /// `Unauthorized` even after both players have deposited.
 #[test]
 fn test_e2e_unauthorized_oracle_rejected() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup_e2e();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup_e2e();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let game_id = String::from_str(&env, "e2e-unauth-oracle");
@@ -424,7 +426,7 @@ fn test_e2e_unauthorized_oracle_rejected() {
 /// game_id must be rejected with `GameIdMismatch` and leave the match Active.
 #[test]
 fn test_e2e_game_id_mismatch_rejected() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup_e2e();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup_e2e();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let real_game_id = String::from_str(&env, "e2e-real-game");
@@ -458,7 +460,7 @@ fn test_e2e_game_id_mismatch_rejected() {
 /// return `InvalidState`.
 #[test]
 fn test_e2e_submit_result_on_pending_match_fails() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup_e2e();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup_e2e();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let game_id = String::from_str(&env, "e2e-pending-submit");
@@ -486,7 +488,7 @@ fn test_e2e_submit_result_on_pending_match_fails() {
 /// `InvalidState` -- no double-payout is possible.
 #[test]
 fn test_e2e_no_double_payout_after_completion() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup_e2e();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup_e2e();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -523,7 +525,7 @@ fn test_e2e_no_double_payout_after_completion() {
 /// Depositing into a Completed match must return `MatchCompleted`.
 #[test]
 fn test_e2e_deposit_into_completed_match_fails() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup_e2e();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup_e2e();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let game_id = String::from_str(&env, "e2e-dep-completed");
@@ -548,7 +550,7 @@ fn test_e2e_deposit_into_completed_match_fails() {
 /// Depositing into a Cancelled match must return `MatchCancelled`.
 #[test]
 fn test_e2e_deposit_into_cancelled_match_fails() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup_e2e();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup_e2e();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let match_id = client.create_match(
@@ -575,7 +577,7 @@ fn test_e2e_deposit_into_cancelled_match_fails() {
 /// 0 (created) -> stake (p1 deposited) -> 2xstake (p2 deposited) -> 0 (completed).
 #[test]
 fn test_e2e_escrow_balance_full_lifecycle() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup_e2e();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup_e2e();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let stake: i128 = 200;
@@ -615,7 +617,7 @@ fn test_e2e_escrow_balance_full_lifecycle() {
 /// each relevant call.
 #[test]
 fn test_e2e_event_sequence_full_lifecycle() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup_e2e();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup_e2e();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let game_id = String::from_str(&env, "e2e-event-seq");
@@ -714,7 +716,7 @@ fn test_e2e_event_sequence_full_lifecycle() {
 /// dispute window expires, finalize executes the overridden payout to Player2.
 #[test]
 fn test_e2e_override_result_then_finalize_payout_to_player2() {
-    let (env, contract_id, oracle, player1, player2, token, admin) = setup_e2e();
+    let (env, contract_id, oracle, player1, player2, token, admin, _safe_address) = setup_e2e();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -815,7 +817,7 @@ fn test_e2e_override_result_then_finalize_payout_to_player2() {
 /// finalize pays Player1 the full pot.
 #[test]
 fn test_e2e_override_draw_to_player1_wins() {
-    let (env, contract_id, oracle, player1, player2, token, admin) = setup_e2e();
+    let (env, contract_id, oracle, player1, player2, token, admin, _safe_address) = setup_e2e();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -860,7 +862,7 @@ fn test_e2e_override_draw_to_player1_wins() {
 /// has expired — callers must use finalize_result after the window closes.
 #[test]
 fn test_e2e_override_result_rejected_after_window_expires() {
-    let (env, contract_id, oracle, player1, player2, token, admin) = setup_e2e();
+    let (env, contract_id, oracle, player1, player2, token, admin, _safe_address) = setup_e2e();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let game_id = String::from_str(&env, "e2e-override-expired");
@@ -892,7 +894,7 @@ fn test_e2e_override_result_rejected_after_window_expires() {
 /// E2E test: finalize_result is rejected while the dispute window is still open.
 #[test]
 fn test_e2e_finalize_result_rejected_during_dispute_window() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup_e2e();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup_e2e();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let game_id = String::from_str(&env, "e2e-finalize-window-open");

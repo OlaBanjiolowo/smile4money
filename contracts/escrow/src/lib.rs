@@ -166,7 +166,13 @@ impl EscrowContract {
         Ok(())
     }
 
-    /// Initialize the contract with a trusted oracle address, an admin, and a default token.
+    /// Initialize the contract with a trusted oracle address, an admin, a default token,
+    /// and a pre-registered safe address that is the sole permitted destination for
+    /// [`emergency_drain`](EscrowContract::emergency_drain).
+    ///
+    /// The `safe_address` is stored immutably at initialization time. It cannot be
+    /// changed afterwards. This eliminates the rug-pull vector where a compromised or
+    /// malicious admin could call `emergency_drain` with an arbitrary destination address.
     ///
     /// # Panics
     ///
@@ -176,6 +182,7 @@ impl EscrowContract {
         oracle: Address,
         admin: Address,
         token: Address,
+        safe_address: Address,
     ) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Oracle) {
             panic!("Contract already initialized");
@@ -185,6 +192,9 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Oracle, &oracle);
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Token, &token);
+        env.storage()
+            .instance()
+            .set(&DataKey::SafeAddress, &safe_address);
         env.storage().instance().set(&DataKey::MatchCount, &0u64);
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage()
@@ -845,8 +855,21 @@ impl EscrowContract {
         Ok(())
     }
 
-    /// Drain all token holdings to a safe address — admin only, requires contract to be paused.
-    pub fn emergency_drain(env: Env, to: Address, caller: Address) -> Result<(), Error> {
+    /// Drain all token holdings to the pre-registered safe address — admin only,
+    /// requires contract to be paused.
+    ///
+    /// The destination is fixed at initialization time via the `safe_address`
+    /// parameter of [`initialize`](EscrowContract::initialize) and stored under
+    /// [`DataKey::SafeAddress`]. The `to` parameter has been intentionally removed:
+    /// accepting an arbitrary destination address would allow a compromised or
+    /// malicious admin to redirect the drain to any address, constituting a
+    /// rug-pull vector against all players with funds in escrow.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Unauthorized`] — `caller` is not the admin.
+    /// * [`Error::NotPaused`]    — the contract is not currently paused.
+    pub fn emergency_drain(env: Env, caller: Address) -> Result<(), Error> {
         let admin: Address = env
             .storage()
             .instance()
@@ -862,6 +885,12 @@ impl EscrowContract {
             return Err(Error::NotPaused);
         }
 
+        let safe_address: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::SafeAddress)
+            .ok_or(Error::Unauthorized)?;
+
         let token: Address = env
             .storage()
             .instance()
@@ -873,12 +902,12 @@ impl EscrowContract {
         let balance = client.balance(&contract);
 
         if balance > 0 {
-            client.transfer(&contract, &to, &balance);
+            client.transfer(&contract, &safe_address, &balance);
         }
 
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("drain")),
-            (balance, to, admin),
+            (balance, safe_address, admin),
         );
 
         Ok(())
