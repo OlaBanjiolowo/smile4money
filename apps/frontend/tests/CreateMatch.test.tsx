@@ -93,3 +93,72 @@ describe('CreateMatch — form interaction', () => {
     expect(input).toHaveValue('game-abc123');
   });
 });
+
+describe('CreateMatch — game_id validation', () => {
+  it('shows error when game ID is empty and form is submitted', async () => {
+    render(<CreateMatch contractId="test-contract" player1Address={validAddress} />);
+
+    fireEvent.click(screen.getByTestId('submit-match-btn'));
+
+    expect(await screen.findByTestId('game-id-error')).toHaveTextContent('Game ID is required');
+  });
+
+  it('shows error when game ID exceeds 64 characters', async () => {
+    render(<CreateMatch contractId="test-contract" player1Address={validAddress} />);
+
+    const input = screen.getByTestId('game-id-input');
+    // 65-character string
+    fireEvent.change(input, { target: { value: 'a'.repeat(65) } });
+    fireEvent.click(screen.getByTestId('submit-match-btn'));
+
+    expect(await screen.findByTestId('game-id-error')).toHaveTextContent(
+      'Game ID must be 64 characters or fewer',
+    );
+  });
+
+  it('shows no error when game ID is exactly 64 characters', async () => {
+    render(<CreateMatch contractId="test-contract" player1Address={validAddress} />);
+
+    const input = screen.getByTestId('game-id-input');
+    fireEvent.change(input, { target: { value: 'a'.repeat(64) } });
+    fireEvent.click(screen.getByTestId('submit-match-btn'));
+
+    expect(screen.queryByTestId('game-id-error')).not.toBeInTheDocument();
+  });
+
+  it('shows error when game ID is a duplicate of a known game ID', async () => {
+    const knownGameIds = ['existing-game-123'];
+    render(
+      <CreateMatch
+        contractId="test-contract"
+        player1Address={validAddress}
+        knownGameIds={knownGameIds}
+      />,
+    );
+
+    const input = screen.getByTestId('game-id-input');
+    fireEvent.change(input, { target: { value: 'existing-game-123' } });
+    fireEvent.click(screen.getByTestId('submit-match-btn'));
+
+    expect(await screen.findByTestId('game-id-error')).toHaveTextContent(
+      'A match with this game ID already exists',
+    );
+  });
+
+  it('shows no error when game ID is unique', async () => {
+    const knownGameIds = ['existing-game-123'];
+    render(
+      <CreateMatch
+        contractId="test-contract"
+        player1Address={validAddress}
+        knownGameIds={knownGameIds}
+      />,
+    );
+
+    const input = screen.getByTestId('game-id-input');
+    fireEvent.change(input, { target: { value: 'new-unique-game-456' } });
+    fireEvent.click(screen.getByTestId('submit-match-btn'));
+
+    expect(screen.queryByTestId('game-id-error')).not.toBeInTheDocument();
+  });
+});
