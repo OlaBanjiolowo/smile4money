@@ -10,6 +10,7 @@ interface CreateMatchProps {
   player1Address: string | null;
   networkPassphrase?: string;
   rpcUrl?: string;
+  knownGameIds?: string[];
   onCreateMatch?: (data: {
     player2: string;
     stakeAmount: string;
@@ -51,7 +52,7 @@ function isValidStellarAddress(address: string): boolean {
   }
 }
 
-function validateForm(data: FormData): FormErrors {
+function validateForm(data: FormData, knownGameIds: string[] = []): FormErrors {
   const errors: FormErrors = {};
 
   if (!data.player2.trim()) {
@@ -71,6 +72,10 @@ function validateForm(data: FormData): FormErrors {
 
   if (!data.gameId.trim()) {
     errors.gameId = 'Game ID is required';
+  } else if (data.gameId.length > 64) {
+    errors.gameId = 'Game ID must be 64 characters or fewer';
+  } else if (knownGameIds.includes(data.gameId.trim())) {
+    errors.gameId = 'A match with this game ID already exists';
   }
 
   return errors;
@@ -81,6 +86,7 @@ export function CreateMatch({
   player1Address,
   networkPassphrase = Networks.TESTNET,
   rpcUrl = 'https://soroban-testnet.stellar.org',
+  knownGameIds = [],
   onCreateMatch,
 }: CreateMatchProps) {
   const [formData, setFormData] = useState<FormData>({
@@ -110,7 +116,7 @@ export function CreateMatch({
   ) {
     const next = { ...formData, [key]: value } as FormData;
     setFormData(next);
-    const validationErrors = validateForm(next);
+    const validationErrors = validateForm(next, knownGameIds);
     setErrors((prev) => ({ ...prev, [key]: validationErrors[key as keyof FormErrors] }));
   }
 
@@ -118,7 +124,7 @@ export function CreateMatch({
     async (e: React.FormEvent) => {
       e.preventDefault();
 
-      const validationErrors = validateForm(formData);
+      const validationErrors = validateForm(formData, knownGameIds);
       setErrors(validationErrors);
 
       if (Object.keys(validationErrors).length > 0) {
