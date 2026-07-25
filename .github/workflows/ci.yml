@@ -4,7 +4,6 @@ on:
   push:
     branches: [ master ]
   pull_request:
-    branches: [ master ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -96,7 +95,7 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin --locked
+        uses: taiki-e/install-action@cargo-tarpaulin
 
       - name: Run coverage (enforce 80% threshold)
         run: cargo tarpaulin --out Xml --out Html --fail-under 80 --verbose
