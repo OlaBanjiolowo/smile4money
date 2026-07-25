@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 
 export type ToastVariant = 'success' | 'error' | 'info';
 
@@ -24,8 +24,16 @@ function createToastId() {
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  // Track active timer IDs so they can be cancelled on unmount or early dismiss.
+  const timersRef = useRef<Map<string, ReturnType<typeof window.setTimeout>>>(new Map());
 
   const dismissToast = useCallback((id: string) => {
+    // Cancel the pending timer if it hasn't fired yet.
+    const timerId = timersRef.current.get(id);
+    if (timerId !== undefined) {
+      window.clearTimeout(timerId);
+      timersRef.current.delete(id);
+    }
     setToasts((current) => current.filter((toast) => toast.id !== id));
   }, []);
 
@@ -37,11 +45,24 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       setToasts((current) => [...current, toast]);
 
       if (duration != null) {
-        window.setTimeout(() => dismissToast(id), duration);
+        const timerId = window.setTimeout(() => {
+          timersRef.current.delete(id);
+          dismissToast(id);
+        }, duration);
+        timersRef.current.set(id, timerId);
       }
     },
     [dismissToast],
   );
+
+  // Clear all pending timers when the provider unmounts.
+  React.useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      timers.forEach((timerId) => window.clearTimeout(timerId));
+      timers.clear();
+    };
+  }, []);
 
   const value = useMemo(
     () => ({

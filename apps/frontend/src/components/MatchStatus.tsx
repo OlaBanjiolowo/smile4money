@@ -94,12 +94,20 @@ export function MatchStatus({
     );
   }
 
-  // Loading state
+  // Loading state — animate-pulse skeleton matching the loaded match card layout
   if (fetchStatus === 'loading' && !matchData) {
     return (
-      <div className="match-status" data-testid="match-status">
-        <div className="spinner" />
-        <p className="loading-message">Loading match status…</p>
+      <div className="match-status animate-pulse" data-testid="match-status-skeleton" aria-busy="true" aria-label="Loading match status">
+        {/* Title bar */}
+        <div className="mb-3 h-6 w-32 rounded bg-slate-200 dark:bg-slate-700" />
+        {/* Match ID line */}
+        <div className="mb-4 h-4 w-48 rounded bg-slate-200 dark:bg-slate-700" />
+        {/* State content block */}
+        <div className="space-y-2 rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+          <div className="h-5 w-24 rounded bg-slate-200 dark:bg-slate-700" />
+          <div className="h-4 w-full rounded bg-slate-200 dark:bg-slate-700" />
+          <div className="h-4 w-3/4 rounded bg-slate-200 dark:bg-slate-700" />
+        </div>
       </div>
     );
   }

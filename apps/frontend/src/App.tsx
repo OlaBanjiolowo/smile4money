@@ -6,6 +6,16 @@ import { useStellarWallet } from './hooks/useStellarWallet';
 import { useTheme } from './hooks/useTheme';
 import type { WalletStatus } from './types';
 
+const ClaimBurn = lazy(() =>
+  import('./components/claim-burn').then((m) => ({ default: m.ClaimBurn })),
+);
+const NetworkBadge = lazy(() =>
+  import('./components/NetworkBadge').then((m) => ({ default: m.NetworkBadge })),
+);
+const History = lazy(() =>
+  import('./pages/History').then((m) => ({ default: m.History })),
+);
+
 export function App() {
   const { status, address, balance, network, connect, disconnect, refreshBalance } =
     useStellarWallet();
