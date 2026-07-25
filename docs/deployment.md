@@ -6,6 +6,14 @@ This document covers end-to-end deployment of smile4money contracts to Stellar t
 
 Every CI build on the `master` branch uploads the compiled WASM binaries as a downloadable artifact. This allows you to verify that a deployed contract matches a specific commit's source code.
 
+### Reproducible Builds
+
+All WASM builds use a pinned Docker image (`stellar/soroban-rust:21.0.0`) to ensure reproducibility. This means:
+
+- The same source code will always produce identical WASM bytecode
+- Different machines will produce the same hashes
+- Contract users can verify deployed bytecode matches the source
+
 ### Downloading an artifact
 
 1. Navigate to the [Actions tab](https://github.com/{{repo}}/actions) on GitHub.
@@ -33,6 +41,23 @@ stellar contract inspect \
 ```
 
 The WASM hash displayed by `stellar contract inspect` should match the `sha256sum` output for the corresponding artifact file, confirming the deployed bytecode matches the source at that commit.
+
+### Local Reproducible Build
+
+To reproduce the build locally and verify it matches CI:
+
+```bash
+# Checkout the target commit
+git checkout <commit-sha>
+
+# Build using the same pinned Docker image as CI
+docker run --rm -v "$(pwd):/workspace" -w /workspace stellar/soroban-rust:21.0.0 cargo build --release --target wasm32-unknown-unknown
+
+# Compare the hash with the CI artifact
+sha256sum target/wasm32-unknown-unknown/release/*.wasm
+```
+
+The local build should produce identical hashes to the CI artifact.
 
 ## Prerequisites
 
@@ -258,6 +283,103 @@ Additionally:
 - [ ] Verify the admin and oracle addresses stored on-chain are correct with `stellar contract inspect`.
 - [ ] Run a smoke test: create a test match, deposit stake, and cancel it to verify the full flow.
 - [ ] Update the frontend configuration with the new mainnet contract IDs and network.
+
+## Verify Deployment — WASM Hash Check
+
+After deploying to either testnet or mainnet, confirm that the on-chain bytecode matches the
+locally compiled artifact. This is a critical step for financial contracts: it proves that no
+substitution occurred between build and deploy.
+
+### Step 1 — Compute the local hash
+
+Build the contracts in release mode (or locate the build output from CI):
+
+```bash
+cargo build --target wasm32-unknown-unknown --release
+```
+
+The compiled artifacts are written to:
+
+```
+target/wasm32-unknown-unknown/release/escrow.wasm
+target/wasm32-unknown-unknown/release/oracle.wasm
+```
+
+Compute their SHA-256 hashes:
+
+```bash
+sha256sum \
+  target/wasm32-unknown-unknown/release/escrow.wasm \
+  target/wasm32-unknown-unknown/release/oracle.wasm
+```
+
+Example output:
+
+```
+a3f1...  target/wasm32-unknown-unknown/release/escrow.wasm
+9c02...  target/wasm32-unknown-unknown/release/oracle.wasm
+```
+
+### Step 2 — Retrieve the on-chain hash
+
+Use `stellar contract inspect` to read the WASM hash stored on-chain for each deployed
+contract. Replace `<CONTRACT_ID>` and network flags as appropriate.
+
+**Testnet:**
+
+```bash
+stellar contract inspect \
+  --id "$CONTRACT_ESCROW" \
+  --network testnet \
+  --rpc-url https://soroban-testnet.stellar.org \
+  --network-passphrase "Test SDF Network ; September 2015"
+
+stellar contract inspect \
+  --id "$CONTRACT_ORACLE" \
+  --network testnet \
+  --rpc-url https://soroban-testnet.stellar.org \
+  --network-passphrase "Test SDF Network ; September 2015"
+```
+
+**Mainnet:**
+
+```bash
+stellar contract inspect \
+  --id "$CONTRACT_ESCROW" \
+  --network mainnet \
+  --rpc-url https://soroban-mainnet.stellar.org \
+  --network-passphrase "Public Global Stellar Network ; September 2015"
+
+stellar contract inspect \
+  --id "$CONTRACT_ORACLE" \
+  --network mainnet \
+  --rpc-url https://soroban-mainnet.stellar.org \
+  --network-passphrase "Public Global Stellar Network ; September 2015"
+```
+
+The command prints the WASM hash reported by the ledger, for example:
+
+```
+wasm_hash: a3f1...
+```
+
+### Step 3 — Compare
+
+The `sha256sum` output for `escrow.wasm` must match the `wasm_hash` field returned by
+`stellar contract inspect` for `CONTRACT_ESCROW`, and likewise for the oracle contract.
+
+**If the hashes match**: the deployed bytecode is byte-for-byte identical to the local build.
+
+**If the hashes do not match**: do not proceed. The on-chain contract does not correspond to the
+audited source. Investigate whether the wrong build artifact was uploaded, or whether the
+contract was upgraded after deployment without updating the local copy.
+
+Add this check to your post-deploy checklist:
+
+```
+- [ ] sha256sum of escrow.wasm matches CONTRACT_ESCROW wasm_hash on-chain
+- [ ] sha256sum of oracle.wasm matches CONTRACT_ORACLE wasm_hash on-chain
+```
 
 ## Troubleshooting
 

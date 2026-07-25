@@ -17,6 +17,11 @@ declare global {
       ) => Promise<{ signedTxXdr: string }>;
       getNetwork?: () => Promise<{ network: string; networkPassphrase: string }>;
     };
+    /** Freighter injects this event emitter for wallet state change notifications. */
+    freighter?: {
+      on?: (event: string, handler: () => void) => void;
+      off?: (event: string, handler: () => void) => void;
+    };
   }
 }
 
@@ -70,6 +75,74 @@ export function useStellarWallet(): StellarWallet {
       return;
     }
     setStatus(window.freighterApi ? 'disconnected' : 'notInstalled');
+  }, []);
+
+  // Subscribe to Freighter wallet change events so that if the user disconnects
+  // or switches accounts/networks from the extension, the app state updates immediately.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    // Freighter dispatches a custom DOM event named "freighter:accountChanged" when
+    // the user changes accounts, and "freighter:networkChanged" when the network changes.
+    // Both cases should trigger a re-check: if the wallet is no longer connected we
+    // transition to disconnected; if the account changed we reload the address.
+    const handleWalletChange = async () => {
+      const api = window.freighterApi;
+      if (!api) {
+        // Extension was removed
+        setAddress(null);
+        setBalance(null);
+        setNetwork('unknown');
+        setStatus('notInstalled');
+        return;
+      }
+
+      try {
+        const { isConnected } = await api.isConnected();
+        if (!isConnected) {
+          // User disconnected from the extension
+          setAddress(null);
+          setBalance(null);
+          setNetwork('unknown');
+          setStatus('disconnected');
+          return;
+        }
+
+        // Account or network may have changed — refresh all state
+        const publicKey = await api.getPublicKey();
+        setAddress(publicKey);
+
+        let detectedNetwork: Network = 'unknown';
+        if (api.getNetwork) {
+          const net = await api.getNetwork();
+          detectedNetwork = detectNetwork(net.networkPassphrase);
+          setNetwork(detectedNetwork);
+        }
+
+        if (detectedNetwork !== 'unknown' && detectedNetwork !== EXPECTED_NETWORK) {
+          setStatus('wrongNetwork');
+        } else {
+          setStatus('connected');
+        }
+
+        fetchHorizonBalance(publicKey, detectedNetwork)
+          .then((bal) => setBalance(bal))
+          .catch(() => setBalance(null));
+      } catch {
+        setAddress(null);
+        setBalance(null);
+        setNetwork('unknown');
+        setStatus('disconnected');
+      }
+    };
+
+    window.addEventListener('freighter:accountChanged', handleWalletChange);
+    window.addEventListener('freighter:networkChanged', handleWalletChange);
+
+    return () => {
+      window.removeEventListener('freighter:accountChanged', handleWalletChange);
+      window.removeEventListener('freighter:networkChanged', handleWalletChange);
+    };
   }, []);
 
   const refreshBalance = useCallback(async () => {

@@ -1,11 +1,42 @@
 import { Router } from 'express';
 import { matchStore } from '../store/index.js';
 import { authenticate } from '../middleware/auth.js';
+import { fetchLichessResult, GameNotFoundError } from '../fetchers/lichess.js';
+import { fetchChessDotComResult } from '../fetchers/chessdotcom.js';
 
 const router = Router();
 const store = matchStore;
 
 router.use(authenticate);
+
+async function validateGameExists(
+  platform: string,
+  gameId: string,
+  username?: string,
+): Promise<{ valid: boolean; error?: string }> {
+  try {
+    if (platform === 'lichess') {
+      await fetchLichessResult(gameId);
+      return { valid: true };
+    } else if (platform === 'chessdotcom') {
+      if (!username || username.length === 0) {
+        return {
+          valid: false,
+          error: 'username is required for chessdotcom game validation',
+        };
+      }
+      await fetchChessDotComResult(username, gameId);
+      return { valid: true };
+    }
+    return { valid: false, error: 'invalid platform' };
+  } catch (error) {
+    if (error instanceof GameNotFoundError) {
+      return { valid: false, error: error.message };
+    }
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return { valid: false, error: `Game validation failed: ${message}` };
+  }
+}
 
 router.post('/', async (req, res) => {
   const payload = req.body;
@@ -14,7 +45,7 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: 'Request body must be JSON' });
   }
 
-  const { player2, stakeAmount, token, gameId, platform } = payload;
+  const { player2, stakeAmount, token, gameId, platform, username } = payload;
 
   if (!player2 || typeof player2 !== 'string') {
     return res.status(400).json({ error: 'player2 is required' });
@@ -40,6 +71,18 @@ router.post('/', async (req, res) => {
 
   if (req.address === player2) {
     return res.status(400).json({ error: 'player1 and player2 must be different addresses' });
+  }
+
+  const gameValidation = await validateGameExists(
+    platform,
+    gameId,
+    typeof username === 'string' ? username : undefined,
+  );
+  if (!gameValidation.valid) {
+    return res.status(400).json({
+      error: 'Invalid game',
+      details: gameValidation.error,
+    });
   }
 
   try {

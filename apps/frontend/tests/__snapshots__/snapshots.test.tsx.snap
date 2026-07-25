@@ -1,0 +1,1202 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ClaimBurn — snapshots > matches snapshot: checking/connecting state 1`] = `
+<div>
+  <div
+    class="dark:bg-slate-900 flex flex-col items-center justify-center rounded-xl bg-slate-50 p-10 text-center"
+    data-testid="wallet-connecting"
+  >
+    <div
+      class="mb-4 h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-violet-600 dark:border-slate-700 dark:border-t-violet-400"
+    />
+    <p
+      class="dark:text-slate-400 text-sm text-slate-500"
+    >
+      Connecting to wallet…
+    </p>
+  </div>
+  <div
+    aria-atomic="true"
+    aria-live="polite"
+    class="toast-portal"
+  />
+</div>
+`;
+
+exports[`ClaimBurn — snapshots > matches snapshot: connected state (claim mode, empty amount) 1`] = `
+<div>
+  <div
+    class="dark:bg-slate-900 dark:border-slate-700 w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
+    data-testid="claim-burn"
+  >
+    <h2
+      class="dark:text-slate-100 mb-5 text-center text-xl font-semibold text-slate-900"
+    >
+      Claim & Burn
+    </h2>
+    <div
+      aria-label="Select mode"
+      class="dark:bg-slate-800 mb-5 flex rounded-lg bg-slate-100 p-1"
+      role="group"
+    >
+      <button
+        aria-label="Switch to claim mode"
+        aria-pressed="true"
+        class="toggle-btn active focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+        data-testid="toggle-claim"
+        type="button"
+      >
+        Claim
+      </button>
+      <button
+        aria-label="Switch to burn mode"
+        aria-pressed="false"
+        class="toggle-btn focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+        data-testid="toggle-burn"
+        type="button"
+      >
+        Burn
+      </button>
+    </div>
+    <form
+      aria-label="Claim tokens"
+      data-testid="claim-burn-form"
+    >
+      <div
+        class="mb-1 flex flex-col gap-1.5"
+      >
+        <label
+          class="dark:text-slate-300 text-sm font-medium text-slate-700"
+          for="amount-input"
+        >
+          Amount (
+          XLM
+          )
+        </label>
+        <div
+          class="flex gap-2"
+        >
+          <input
+            aria-invalid="false"
+            aria-label="Claim amount"
+            class="focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+            data-testid="amount-input"
+            id="amount-input"
+            inputmode="decimal"
+            pattern="^[0-9]*(?:[.,][0-9]*)?$"
+            placeholder="0.00"
+            type="text"
+            value=""
+          />
+        </div>
+      </div>
+      <button
+        aria-busy="false"
+        aria-label="Claim tokens"
+        class="btn btn-claim focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+        data-testid="submit-btn"
+        disabled=""
+        type="submit"
+      >
+        Claim
+      </button>
+    </form>
+  </div>
+  <div
+    aria-atomic="true"
+    aria-live="polite"
+    class="toast-portal"
+  />
+</div>
+`;
+
+exports[`ClaimBurn — snapshots > matches snapshot: connected state in burn mode 1`] = `
+<div>
+  <div
+    class="dark:bg-slate-900 dark:border-slate-700 w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
+    data-testid="claim-burn"
+  >
+    <h2
+      class="dark:text-slate-100 mb-5 text-center text-xl font-semibold text-slate-900"
+    >
+      Claim & Burn
+    </h2>
+    <div
+      aria-label="Select mode"
+      class="dark:bg-slate-800 mb-5 flex rounded-lg bg-slate-100 p-1"
+      role="group"
+    >
+      <button
+        aria-label="Switch to claim mode"
+        aria-pressed="true"
+        class="toggle-btn active focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+        data-testid="toggle-claim"
+        type="button"
+      >
+        Claim
+      </button>
+      <button
+        aria-label="Switch to burn mode"
+        aria-pressed="false"
+        class="toggle-btn focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+        data-testid="toggle-burn"
+        type="button"
+      >
+        Burn
+      </button>
+    </div>
+    <form
+      aria-label="Claim tokens"
+      data-testid="claim-burn-form"
+    >
+      <div
+        class="mb-1 flex flex-col gap-1.5"
+      >
+        <label
+          class="dark:text-slate-300 text-sm font-medium text-slate-700"
+          for="amount-input"
+        >
+          Amount (
+          XLM
+          )
+        </label>
+        <div
+          class="flex gap-2"
+        >
+          <input
+            aria-invalid="false"
+            aria-label="Claim amount"
+            class="focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+            data-testid="amount-input"
+            id="amount-input"
+            inputmode="decimal"
+            pattern="^[0-9]*(?:[.,][0-9]*)?$"
+            placeholder="0.00"
+            type="text"
+            value=""
+          />
+        </div>
+      </div>
+      <button
+        aria-busy="false"
+        aria-label="Claim tokens"
+        class="btn btn-claim focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+        data-testid="submit-btn"
+        disabled=""
+        type="submit"
+      >
+        Claim
+      </button>
+    </form>
+  </div>
+  <div
+    aria-atomic="true"
+    aria-live="polite"
+    class="toast-portal"
+  />
+</div>
+`;
+
+exports[`ClaimBurn — snapshots > matches snapshot: connected state with publicKey and balance 1`] = `
+<div>
+  <div
+    class="dark:bg-slate-900 dark:border-slate-700 w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
+    data-testid="claim-burn"
+  >
+    <h2
+      class="dark:text-slate-100 mb-5 text-center text-xl font-semibold text-slate-900"
+    >
+      Claim & Burn
+    </h2>
+    <div
+      aria-label="Select mode"
+      class="dark:bg-slate-800 mb-5 flex rounded-lg bg-slate-100 p-1"
+      role="group"
+    >
+      <button
+        aria-label="Switch to claim mode"
+        aria-pressed="true"
+        class="toggle-btn active focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+        data-testid="toggle-claim"
+        type="button"
+      >
+        Claim
+      </button>
+      <button
+        aria-label="Switch to burn mode"
+        aria-pressed="false"
+        class="toggle-btn focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+        data-testid="toggle-burn"
+        type="button"
+      >
+        Burn
+      </button>
+    </div>
+    <div
+      class="dark:bg-slate-800 dark:border-slate-700 mb-4 rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-sm"
+      data-testid="wallet-info"
+    >
+      <div
+        class="flex flex-wrap items-center gap-2"
+      >
+        <span
+          class="dark:text-slate-400 font-medium text-slate-600"
+        >
+          Connected
+        </span>
+        <span
+          class="dark:text-emerald-400 font-mono text-emerald-700 font-semibold"
+        >
+          GABC
+          …
+          0XYZ
+        </span>
+      </div>
+      <div
+        class="mt-2 flex flex-wrap items-center gap-2 border-t border-emerald-200 pt-2 dark:border-emerald-800"
+      >
+        <span
+          class="dark:text-slate-400 font-medium text-slate-600"
+        >
+          Balance
+        </span>
+        <span
+          aria-label="100.5 XLM"
+          class="dark:text-emerald-400 font-mono flex-1 text-emerald-700 font-semibold"
+          data-testid="wallet-balance"
+        >
+          100.5
+           
+          XLM
+        </span>
+      </div>
+    </div>
+    <form
+      aria-label="Claim tokens"
+      data-testid="claim-burn-form"
+    >
+      <div
+        class="mb-1 flex flex-col gap-1.5"
+      >
+        <label
+          class="dark:text-slate-300 text-sm font-medium text-slate-700"
+          for="amount-input"
+        >
+          Amount (
+          XLM
+          )
+        </label>
+        <div
+          class="flex gap-2"
+        >
+          <input
+            aria-invalid="false"
+            aria-label="Claim amount"
+            class="focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+            data-testid="amount-input"
+            id="amount-input"
+            inputmode="decimal"
+            pattern="^[0-9]*(?:[.,][0-9]*)?$"
+            placeholder="0.00"
+            type="text"
+            value=""
+          />
+          <button
+            aria-label="Use maximum balance"
+            class="btn-max dark:bg-slate-800 dark:border-slate-600 dark:text-violet-400 dark:hover:bg-slate-700 shrink-0 rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-semibold text-violet-600 transition-colors hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-50"
+            data-testid="max-btn"
+            type="button"
+          >
+            Max
+          </button>
+        </div>
+      </div>
+      <button
+        aria-busy="false"
+        aria-label="Claim tokens"
+        class="btn btn-claim focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+        data-testid="submit-btn"
+        disabled=""
+        type="submit"
+      >
+        Claim
+      </button>
+    </form>
+  </div>
+  <div
+    aria-atomic="true"
+    aria-live="polite"
+    class="toast-portal"
+  />
+</div>
+`;
+
+exports[`ClaimBurn — snapshots > matches snapshot: connecting state 1`] = `
+<div>
+  <div
+    class="dark:bg-slate-900 flex flex-col items-center justify-center rounded-xl bg-slate-50 p-10 text-center"
+    data-testid="wallet-connecting"
+  >
+    <div
+      class="mb-4 h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-violet-600 dark:border-slate-700 dark:border-t-violet-400"
+    />
+    <p
+      class="dark:text-slate-400 text-sm text-slate-500"
+    >
+      Connecting to wallet…
+    </p>
+  </div>
+  <div
+    aria-atomic="true"
+    aria-live="polite"
+    class="toast-portal"
+  />
+</div>
+`;
+
+exports[`ClaimBurn — snapshots > matches snapshot: disconnected state 1`] = `
+<div>
+  <div
+    class="claim-burn"
+    data-testid="wallet-disconnected"
+  >
+    <h2
+      class="claim-burn-title"
+    >
+      Claim & Burn
+    </h2>
+    <div
+      class="wallet-state"
+      data-testid="wallet-disconnected-state"
+    >
+      <span
+        class="wallet-state-icon"
+      >
+        💼
+      </span>
+      <h3
+        class="wallet-state-title"
+      >
+        Connect Your Wallet
+      </h3>
+      <p
+        class="wallet-state-message"
+      >
+        Connect your Freighter wallet to claim rewards or burn tokens.
+      </p>
+      <button
+        aria-label="Connect wallet"
+        class="btn btn-connect focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+        data-testid="connect-wallet-btn"
+      >
+        Connect Wallet
+      </button>
+    </div>
+    <form
+      aria-label="Claim tokens"
+      data-testid="claim-burn-form"
+    >
+      <div
+        class="form-group"
+      >
+        <label
+          for="amount-input"
+        >
+          Amount (
+          XLM
+          )
+        </label>
+        <div
+          class="input-row"
+        >
+          <input
+            aria-invalid="false"
+            aria-label="Claim amount"
+            class="focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+            data-testid="amount-input"
+            disabled=""
+            id="amount-input"
+            min="0"
+            placeholder="0.00"
+            step="any"
+            type="number"
+            value=""
+          />
+        </div>
+      </div>
+      <button
+        aria-busy="false"
+        aria-label="Claim disabled until wallet is connected"
+        class="btn btn-claim focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+        data-testid="submit-btn"
+        disabled=""
+        type="submit"
+      >
+        Claim
+      </button>
+    </form>
+  </div>
+  <div
+    aria-atomic="true"
+    aria-live="polite"
+    class="toast-portal"
+  />
+</div>
+`;
+
+exports[`ClaimBurn — snapshots > matches snapshot: not installed state 1`] = `
+<div>
+  <div
+    class="dark:bg-slate-900 flex flex-col items-center justify-center rounded-xl bg-slate-50 p-10 text-center"
+    data-testid="wallet-not-installed"
+  >
+    <span
+      class="mb-4 text-4xl"
+    >
+      ⚠️
+    </span>
+    <h3
+      class="dark:text-slate-100 mb-2 text-lg font-semibold text-slate-900"
+    >
+      Freighter Not Found
+    </h3>
+    <p
+      class="dark:text-slate-400 mb-4 text-sm text-slate-500"
+    >
+      Please install the
+       
+      <a
+        class="text-violet-600 underline hover:no-underline dark:text-violet-400"
+        href="https://freighter.app"
+        rel="noopener noreferrer"
+        target="_blank"
+      >
+        Freighter wallet extension
+      </a>
+       
+      to continue.
+    </p>
+  </div>
+  <div
+    aria-atomic="true"
+    aria-live="polite"
+    class="toast-portal"
+  />
+</div>
+`;
+
+exports[`ClaimBurn — snapshots > matches snapshot: wrong network state 1`] = `
+<div>
+  <div
+    class="dark:bg-slate-900 flex flex-col items-center justify-center rounded-xl bg-slate-50 p-10 text-center"
+    data-testid="wallet-wrong-network"
+  >
+    <span
+      class="mb-4 text-4xl"
+    >
+      🌐
+    </span>
+    <h3
+      class="dark:text-slate-100 mb-2 text-lg font-semibold text-slate-900"
+    >
+      Wrong Network
+    </h3>
+    <p
+      class="dark:text-slate-400 mb-4 text-sm text-slate-500"
+    >
+      Please switch your Freighter wallet to
+       
+      <strong
+        class="dark:text-slate-200 text-slate-700"
+      >
+        testnet
+      </strong>
+      .
+    </p>
+    <button
+      aria-label="Switch to testnet network"
+      data-testid="switch-network-btn"
+      type="button"
+    >
+      Switch to 
+      testnet
+    </button>
+  </div>
+  <div
+    aria-atomic="true"
+    aria-live="polite"
+    class="toast-portal"
+  />
+</div>
+`;
+
+exports[`CreateMatch — snapshots > matches snapshot: Chess.com platform selected 1`] = `
+<div>
+  <div
+    class="create-match"
+    data-testid="create-match"
+  >
+    <h2
+      class="create-match-title"
+    >
+      Create New Match
+    </h2>
+    <form
+      data-testid="create-match-form"
+      novalidate=""
+    >
+      <div
+        class="form-group"
+      >
+        <label>
+          Stake Token
+        </label>
+        <div
+          aria-label="Select token"
+          class="token-toggle"
+          role="group"
+        >
+          <button
+            aria-pressed="true"
+            class="toggle-btn active"
+            data-testid="toggle-xlm"
+            type="button"
+          >
+            XLM
+          </button>
+          <button
+            aria-pressed="false"
+            class="toggle-btn"
+            data-testid="toggle-usdc"
+            type="button"
+          >
+            USDC
+          </button>
+        </div>
+      </div>
+      <div
+        class="form-group"
+      >
+        <label
+          for="player2-address"
+        >
+          Player 2 Address
+        </label>
+        <input
+          aria-invalid="false"
+          data-testid="player2-input"
+          id="player2-address"
+          placeholder="G..."
+          type="text"
+          value=""
+        />
+      </div>
+      <div
+        class="form-group"
+      >
+        <label
+          for="stake-amount"
+        >
+          Stake Amount (
+          XLM
+          )
+        </label>
+        <input
+          aria-invalid="false"
+          data-testid="stake-amount-input"
+          id="stake-amount"
+          min="0"
+          placeholder="0.00"
+          step="any"
+          type="number"
+          value=""
+        />
+      </div>
+      <div
+        class="form-group"
+      >
+        <label
+          for="game-id"
+        >
+          Game ID
+        </label>
+        <input
+          aria-invalid="false"
+          data-testid="game-id-input"
+          id="game-id"
+          placeholder="Enter game ID from platform"
+          type="text"
+          value=""
+        />
+      </div>
+      <div
+        class="form-group"
+      >
+        <label>
+          Platform
+        </label>
+        <div
+          aria-label="Select platform"
+          class="platform-selector"
+          role="group"
+        >
+          <button
+            aria-pressed="true"
+            class="platform-btn active"
+            data-testid="platform-lichess"
+            type="button"
+          >
+            Lichess
+          </button>
+          <button
+            aria-pressed="false"
+            class="platform-btn"
+            data-testid="platform-chesscom"
+            type="button"
+          >
+            Chess.com
+          </button>
+        </div>
+      </div>
+      <button
+        aria-busy="false"
+        class="btn btn-submit"
+        data-testid="submit-match-btn"
+        type="submit"
+      >
+        Create Match
+      </button>
+    </form>
+  </div>
+</div>
+`;
+
+exports[`CreateMatch — snapshots > matches snapshot: USDC token selected 1`] = `
+<div>
+  <div
+    class="create-match"
+    data-testid="create-match"
+  >
+    <h2
+      class="create-match-title"
+    >
+      Create New Match
+    </h2>
+    <form
+      data-testid="create-match-form"
+      novalidate=""
+    >
+      <div
+        class="form-group"
+      >
+        <label>
+          Stake Token
+        </label>
+        <div
+          aria-label="Select token"
+          class="token-toggle"
+          role="group"
+        >
+          <button
+            aria-pressed="true"
+            class="toggle-btn active"
+            data-testid="toggle-xlm"
+            type="button"
+          >
+            XLM
+          </button>
+          <button
+            aria-pressed="false"
+            class="toggle-btn"
+            data-testid="toggle-usdc"
+            type="button"
+          >
+            USDC
+          </button>
+        </div>
+      </div>
+      <div
+        class="form-group"
+      >
+        <label
+          for="player2-address"
+        >
+          Player 2 Address
+        </label>
+        <input
+          aria-invalid="false"
+          data-testid="player2-input"
+          id="player2-address"
+          placeholder="G..."
+          type="text"
+          value=""
+        />
+      </div>
+      <div
+        class="form-group"
+      >
+        <label
+          for="stake-amount"
+        >
+          Stake Amount (
+          XLM
+          )
+        </label>
+        <input
+          aria-invalid="false"
+          data-testid="stake-amount-input"
+          id="stake-amount"
+          min="0"
+          placeholder="0.00"
+          step="any"
+          type="number"
+          value=""
+        />
+      </div>
+      <div
+        class="form-group"
+      >
+        <label
+          for="game-id"
+        >
+          Game ID
+        </label>
+        <input
+          aria-invalid="false"
+          data-testid="game-id-input"
+          id="game-id"
+          placeholder="Enter game ID from platform"
+          type="text"
+          value=""
+        />
+      </div>
+      <div
+        class="form-group"
+      >
+        <label>
+          Platform
+        </label>
+        <div
+          aria-label="Select platform"
+          class="platform-selector"
+          role="group"
+        >
+          <button
+            aria-pressed="true"
+            class="platform-btn active"
+            data-testid="platform-lichess"
+            type="button"
+          >
+            Lichess
+          </button>
+          <button
+            aria-pressed="false"
+            class="platform-btn"
+            data-testid="platform-chesscom"
+            type="button"
+          >
+            Chess.com
+          </button>
+        </div>
+      </div>
+      <button
+        aria-busy="false"
+        class="btn btn-submit"
+        data-testid="submit-match-btn"
+        type="submit"
+      >
+        Create Match
+      </button>
+    </form>
+  </div>
+</div>
+`;
+
+exports[`CreateMatch — snapshots > matches snapshot: default state (XLM / Lichess) 1`] = `
+<div>
+  <div
+    class="create-match"
+    data-testid="create-match"
+  >
+    <h2
+      class="create-match-title"
+    >
+      Create New Match
+    </h2>
+    <form
+      data-testid="create-match-form"
+      novalidate=""
+    >
+      <div
+        class="form-group"
+      >
+        <label>
+          Stake Token
+        </label>
+        <div
+          aria-label="Select token"
+          class="token-toggle"
+          role="group"
+        >
+          <button
+            aria-pressed="true"
+            class="toggle-btn active"
+            data-testid="toggle-xlm"
+            type="button"
+          >
+            XLM
+          </button>
+          <button
+            aria-pressed="false"
+            class="toggle-btn"
+            data-testid="toggle-usdc"
+            type="button"
+          >
+            USDC
+          </button>
+        </div>
+      </div>
+      <div
+        class="form-group"
+      >
+        <label
+          for="player2-address"
+        >
+          Player 2 Address
+        </label>
+        <input
+          aria-invalid="false"
+          data-testid="player2-input"
+          id="player2-address"
+          placeholder="G..."
+          type="text"
+          value=""
+        />
+      </div>
+      <div
+        class="form-group"
+      >
+        <label
+          for="stake-amount"
+        >
+          Stake Amount (
+          XLM
+          )
+        </label>
+        <input
+          aria-invalid="false"
+          data-testid="stake-amount-input"
+          id="stake-amount"
+          min="0"
+          placeholder="0.00"
+          step="any"
+          type="number"
+          value=""
+        />
+      </div>
+      <div
+        class="form-group"
+      >
+        <label
+          for="game-id"
+        >
+          Game ID
+        </label>
+        <input
+          aria-invalid="false"
+          data-testid="game-id-input"
+          id="game-id"
+          placeholder="Enter game ID from platform"
+          type="text"
+          value=""
+        />
+      </div>
+      <div
+        class="form-group"
+      >
+        <label>
+          Platform
+        </label>
+        <div
+          aria-label="Select platform"
+          class="platform-selector"
+          role="group"
+        >
+          <button
+            aria-pressed="true"
+            class="platform-btn active"
+            data-testid="platform-lichess"
+            type="button"
+          >
+            Lichess
+          </button>
+          <button
+            aria-pressed="false"
+            class="platform-btn"
+            data-testid="platform-chesscom"
+            type="button"
+          >
+            Chess.com
+          </button>
+        </div>
+      </div>
+      <button
+        aria-busy="false"
+        class="btn btn-submit"
+        data-testid="submit-match-btn"
+        type="submit"
+      >
+        Create Match
+      </button>
+    </form>
+  </div>
+</div>
+`;
+
+exports[`MatchStatus — snapshots > matches snapshot: active state 1`] = `
+<div>
+  <div
+    class="match-status"
+    data-testid="match-status"
+  >
+    <h2
+      class="match-status-title"
+    >
+      Match Status
+    </h2>
+    <div
+      class="match-id-display"
+      data-testid="match-id-display"
+    >
+      Match ID: 
+      <strong>
+        2
+      </strong>
+    </div>
+    <div
+      class="state-content active"
+      data-testid="state-active"
+    >
+      <h3
+        class="state-title"
+      >
+        Active
+      </h3>
+      <p
+        class="state-description"
+      >
+        Game is in progress on 
+        Lichess
+        . Game ID: 
+        game-def
+      </p>
+      <p
+        class="waiting-oracle"
+      >
+        Waiting for oracle to submit result…
+      </p>
+    </div>
+  </div>
+</div>
+`;
+
+exports[`MatchStatus — snapshots > matches snapshot: cancelled state 1`] = `
+<div>
+  <div
+    class="match-status"
+    data-testid="match-status"
+  >
+    <h2
+      class="match-status-title"
+    >
+      Match Status
+    </h2>
+    <div
+      class="match-id-display"
+      data-testid="match-id-display"
+    >
+      Match ID: 
+      <strong>
+        4
+      </strong>
+    </div>
+    <div
+      class="state-content cancelled"
+      data-testid="state-cancelled"
+    >
+      <h3
+        class="state-title"
+      >
+        Cancelled
+      </h3>
+      <p
+        class="state-description"
+      >
+        This match has been cancelled. Any deposited stakes have been refunded.
+      </p>
+    </div>
+  </div>
+</div>
+`;
+
+exports[`MatchStatus — snapshots > matches snapshot: completed state with winner 1`] = `
+<div>
+  <div
+    class="match-status"
+    data-testid="match-status"
+  >
+    <h2
+      class="match-status-title"
+    >
+      Match Status
+    </h2>
+    <div
+      class="match-id-display"
+      data-testid="match-id-display"
+    >
+      Match ID: 
+      <strong>
+        3
+      </strong>
+    </div>
+    <div
+      class="state-content completed"
+      data-testid="state-completed"
+    >
+      <h3
+        class="state-title"
+      >
+        Completed
+      </h3>
+      <p
+        class="state-description"
+      >
+        Winner: Player 1. Prize of 150 XLM has been paid out.
+      </p>
+    </div>
+  </div>
+</div>
+`;
+
+exports[`MatchStatus — snapshots > matches snapshot: loading state (match ID provided, no fetch override) 1`] = `
+<div>
+  <div
+    class="match-status"
+    data-testid="match-status"
+  >
+    <div
+      class="spinner"
+    />
+    <p
+      class="loading-message"
+    >
+      Loading match status…
+    </p>
+  </div>
+</div>
+`;
+
+exports[`MatchStatus — snapshots > matches snapshot: match not found 1`] = `
+<div>
+  <div
+    class="match-status"
+    data-testid="match-status"
+  >
+    <p
+      class="feedback error"
+      data-testid="match-not-found"
+      role="alert"
+    >
+      Match not found
+    </p>
+  </div>
+</div>
+`;
+
+exports[`MatchStatus — snapshots > matches snapshot: no match ID (empty prompt) 1`] = `
+<div>
+  <div
+    class="match-status"
+    data-testid="match-status"
+  >
+    <p
+      class="no-match-message"
+    >
+      Enter a match ID to view status
+    </p>
+  </div>
+</div>
+`;
+
+exports[`MatchStatus — snapshots > matches snapshot: pending state 1`] = `
+<div>
+  <div
+    class="match-status"
+    data-testid="match-status"
+  >
+    <h2
+      class="match-status-title"
+    >
+      Match Status
+    </h2>
+    <div
+      class="match-id-display"
+      data-testid="match-id-display"
+    >
+      Match ID: 
+      <strong>
+        1
+      </strong>
+    </div>
+    <div
+      class="state-content pending"
+      data-testid="state-pending"
+    >
+      <h3
+        class="state-title"
+      >
+        Pending
+      </h3>
+      <p
+        class="state-description"
+      >
+        Waiting for both players to deposit their stakes.
+      </p>
+      <div
+        class="deposit-status"
+        data-testid="deposit-status"
+      >
+        <span>
+          Player 1: 
+          ✓
+           
+          <span
+            class="address-small"
+          >
+            (
+            GPLA
+            ...
+            1ABC
+            )
+          </span>
+        </span>
+        <br />
+        <span>
+          Player 2:
+           
+          <span
+            class="address-small"
+          >
+            (
+            GPLA
+            ...
+            2XYZ
+            )
+          </span>
+          ✓
+        </span>
+      </div>
+    </div>
+  </div>
+</div>
+`;
