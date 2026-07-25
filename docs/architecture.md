@@ -156,6 +156,91 @@ sequenceDiagram
     EC--)EC: emit ("match", "completed")
 ```
 
+## Contract Registry
+
+### Purpose
+
+The `contract-registry` contract (`contracts/contract-registry`) provides a lightweight
+on-chain directory of deployed contract addresses. Deployment scripts register the escrow and
+oracle contract IDs here after each deploy; the frontend and any tooling can query the registry
+instead of reading contract IDs from environment variables or configuration files. This
+eliminates the need to redistribute `.env` files when contracts are redeployed.
+
+The registry also stores a capped log of deployment events via `submit_event`, giving a
+lightweight on-chain audit trail of when contracts were registered or updated.
+
+### Deployment relationship
+
+```
+deploy_testnet.sh / deploy_mainnet.sh
+        │
+        ├─► deploy escrow.wasm       ──► CONTRACT_ESCROW
+        ├─► deploy oracle.wasm       ──► CONTRACT_ORACLE
+        ├─► deploy contract-registry ──► CONTRACT_REGISTRY
+        │
+        ├─► registry.register_contract(admin, "escrow")
+        ├─► registry.submit_event(admin, "escrow_deployed")
+        ├─► registry.register_contract(admin, "oracle")
+        └─► registry.submit_event(admin, "oracle_deployed")
+```
+
+On redeployment the script calls `deregister_contract` before `register_contract` so the
+registry always reflects the currently live contract IDs.
+
+### Contract Registry API
+
+```
+initialize(admin: Address, max_events: u32) -> Result<(), Error>
+register_contract(caller: Address, contract_id: Symbol) -> Result<(), Error>
+update_contract(caller: Address, contract_id: Symbol) -> Result<(), Error>
+deregister_contract(caller: Address, contract_id: Symbol) -> Result<(), Error>
+submit_event(caller: Address, event_name: Symbol) -> Result<(), Error>
+pause(caller: Address) -> Result<(), Error>
+unpause(caller: Address) -> Result<(), Error>
+```
+
+`register_contract`, `update_contract`, and `pause`/`unpause` are restricted to the **admin**
+address set at initialisation.
+
+`deregister_contract` may be called by either the admin or the original registrant.
+
+`submit_event` is open to any authenticated caller but is capped by `max_events`; once the
+cap is reached every further call returns `Error::MaxEventsReached`.
+
+### Errors
+
+| Error | Code | Meaning |
+|-------|------|---------|
+| `Unauthorized` | 1 | Caller is not the admin (or registrant for `deregister_contract`) |
+| `ContractPaused` | 2 | Registry is paused; mutating operations are blocked |
+| `MaxEventsReached` | 3 | The event log has hit the cap set at initialisation |
+| `ContractNotFound` | 4 | No registration exists for the given `contract_id` symbol |
+| `AlreadyRegistered` | 5 | A registration with this `contract_id` symbol already exists |
+
+### Storage
+
+| Key | Storage | Description |
+|-----|---------|-------------|
+| `DataKey::Admin` | Instance | Admin address |
+| `DataKey::Paused` | Instance | Circuit-breaker flag |
+| `DataKey::MaxEvents` | Instance | Maximum event log capacity |
+| `DataKey::Registrations` | Instance | `Map<Symbol, ContractRecord>` — all registered contracts |
+| `DataKey::Events` | Instance | `Vec<Symbol>` — ordered event log |
+
+`ContractRecord` fields: `registrant: Address`, `contract_id: Symbol`, `active: bool`.
+
+### Frontend usage
+
+The frontend reads the registry at startup to resolve current contract IDs:
+
+```ts
+const escrowId  = await registry.getRegistration("escrow");
+const oracleId  = await registry.getRegistration("oracle");
+```
+
+This means the frontend configuration does not need to be rebuilt or redeployed when contracts
+are upgraded — only the registry entry needs to be updated by the admin.
+
 ## Events
 
 | Contract | Topics | Data |

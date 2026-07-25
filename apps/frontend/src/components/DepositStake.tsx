@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Networks, rpc } from '@stellar/stellar-sdk';
 
-type DepositStatus = 'idle' | 'loading' | 'pending' | 'success' | 'error';
+type DepositStatus = 'idle' | 'loading' | 'pending' | 'success' | 'error' | 'approving';
+type AllowanceStatus = 'unknown' | 'checking' | 'sufficient' | 'insufficient';
 
 interface MatchDetails {
   stakeAmount: string;
@@ -19,6 +20,12 @@ interface DepositStakeProps {
   networkPassphrase?: string;
   rpcUrl?: string;
   onDeposit?: (matchId: string) => Promise<void>;
+  /** Called when the user clicks 'Approve Token'. Should submit an approve/allowance tx. */
+  onApprove?: (matchId: string) => Promise<void>;
+  /** Optional: externally supply allowance status to skip the internal check. */
+  allowanceSufficient?: boolean | null;
+  /** Optional: externally supply allowance check function. */
+  checkAllowance?: (playerAddress: string, contractId: string) => Promise<boolean>;
 }
 
 export function DepositStake({
@@ -28,11 +35,15 @@ export function DepositStake({
   networkPassphrase = Networks.TESTNET,
   rpcUrl = 'https://soroban-testnet.stellar.org',
   onDeposit,
+  onApprove,
+  allowanceSufficient = null,
+  checkAllowance,
 }: DepositStakeProps) {
   const [matchDetails, setMatchDetails] = useState<MatchDetails | null>(null);
   const [status, setStatus] = useState<DepositStatus>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const [txHash, setTxHash] = useState<string | null>(null);
+  const [allowanceStatus, setAllowanceStatus] = useState<AllowanceStatus>('unknown');
 
   const hasDeposited = (matchDetails: MatchDetails | null): boolean => {
     if (!matchDetails || !playerAddress) return false;
@@ -66,6 +77,55 @@ export function DepositStake({
     fetchMatchDetails();
   }, [fetchMatchDetails]);
 
+  // Sync externally-supplied allowance status when the prop changes
+  useEffect(() => {
+    if (allowanceSufficient === null) return;
+    setAllowanceStatus(allowanceSufficient ? 'sufficient' : 'insufficient');
+  }, [allowanceSufficient]);
+
+  // Run the internal allowance check whenever the player or contract changes
+  const verifyAllowance = useCallback(async () => {
+    if (!playerAddress || !contractId) return;
+
+    // If a custom checker was provided, use it; otherwise default to sufficient
+    // (XLM is a native asset with no ERC-20-style allowance requirement)
+    if (checkAllowance) {
+      setAllowanceStatus('checking');
+      try {
+        const ok = await checkAllowance(playerAddress, contractId);
+        setAllowanceStatus(ok ? 'sufficient' : 'insufficient');
+      } catch {
+        // On error, default to sufficient so the deposit button stays usable
+        setAllowanceStatus('sufficient');
+      }
+    } else {
+      // No checker supplied — XLM native tokens do not require approval
+      setAllowanceStatus('sufficient');
+    }
+  }, [playerAddress, contractId, checkAllowance]);
+
+  useEffect(() => {
+    if (allowanceSufficient !== null) return; // Controlled externally
+    verifyAllowance();
+  }, [allowanceSufficient, verifyAllowance]);
+
+  const handleApprove = useCallback(async () => {
+    if (!matchId) return;
+
+    setStatus('approving');
+    setErrorMsg('');
+
+    try {
+      await onApprove?.(matchId);
+      // Re-check allowance after approval
+      await verifyAllowance();
+      setStatus('idle');
+    } catch (err) {
+      setStatus('error');
+      setErrorMsg(err instanceof Error ? err.message : 'Approval transaction failed');
+    }
+  }, [matchId, onApprove, verifyAllowance]);
+
   const handleDeposit = useCallback(async () => {
     if (!matchId) return;
 
@@ -84,7 +144,13 @@ export function DepositStake({
 
   const isLoading = status === 'loading';
   const isPending = status === 'pending';
-  const isDisabled = isLoading || hasDeposited(matchDetails);
+  const isApproving = status === 'approving';
+  const isCheckingAllowance = allowanceStatus === 'checking';
+  const needsApproval = allowanceStatus === 'insufficient';
+
+  // Deposit button is disabled when: loading match data, player already deposited,
+  // allowance is still being checked, or allowance is insufficient
+  const isDisabled = isLoading || hasDeposited(matchDetails) || isCheckingAllowance || needsApproval;
 
   // Loading state
   if (isLoading && !matchDetails) {
@@ -157,6 +223,43 @@ export function DepositStake({
         </div>
       )}
 
+      {/* Allowance check banner */}
+      {isCheckingAllowance && (
+        <p
+          className="feedback info"
+          role="status"
+          data-testid="allowance-checking"
+          aria-live="polite"
+        >
+          Checking token allowance…
+        </p>
+      )}
+
+      {/* Approve button — shown when the escrow contract lacks spending permission */}
+      {needsApproval && !hasDeposited(matchDetails) && (
+        <>
+          <p
+            className="feedback warning"
+            role="note"
+            data-testid="allowance-warning"
+            aria-live="polite"
+          >
+            The escrow contract is not approved to spend your tokens. Approve it first, then
+            deposit.
+          </p>
+          <button
+            type="button"
+            className="btn btn-approve"
+            onClick={handleApprove}
+            disabled={isApproving || isLoading}
+            data-testid="approve-btn"
+            aria-busy={isApproving}
+          >
+            {isApproving ? 'Approving…' : 'Approve Token'}
+          </button>
+        </>
+      )}
+
       <button
         type="button"
         className="btn btn-deposit"
@@ -169,7 +272,9 @@ export function DepositStake({
           ? 'Depositing…'
           : hasDeposited(matchDetails)
             ? 'Already Deposited'
-            : 'Deposit Stake'}
+            : isCheckingAllowance
+              ? 'Checking allowance…'
+              : 'Deposit Stake'}
       </button>
 
       {/* Success */}

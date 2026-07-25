@@ -6,6 +6,14 @@ This document covers end-to-end deployment of smile4money contracts to Stellar t
 
 Every CI build on the `master` branch uploads the compiled WASM binaries as a downloadable artifact. This allows you to verify that a deployed contract matches a specific commit's source code.
 
+### Reproducible Builds
+
+All WASM builds use a pinned Docker image (`stellar/soroban-rust:21.0.0`) to ensure reproducibility. This means:
+
+- The same source code will always produce identical WASM bytecode
+- Different machines will produce the same hashes
+- Contract users can verify deployed bytecode matches the source
+
 ### Downloading an artifact
 
 1. Navigate to the [Actions tab](https://github.com/{{repo}}/actions) on GitHub.
@@ -33,6 +41,23 @@ stellar contract inspect \
 ```
 
 The WASM hash displayed by `stellar contract inspect` should match the `sha256sum` output for the corresponding artifact file, confirming the deployed bytecode matches the source at that commit.
+
+### Local Reproducible Build
+
+To reproduce the build locally and verify it matches CI:
+
+```bash
+# Checkout the target commit
+git checkout <commit-sha>
+
+# Build using the same pinned Docker image as CI
+docker run --rm -v "$(pwd):/workspace" -w /workspace stellar/soroban-rust:21.0.0 cargo build --release --target wasm32-unknown-unknown
+
+# Compare the hash with the CI artifact
+sha256sum target/wasm32-unknown-unknown/release/*.wasm
+```
+
+The local build should produce identical hashes to the CI artifact.
 
 ## Prerequisites
 
@@ -259,90 +284,102 @@ Additionally:
 - [ ] Run a smoke test: create a test match, deposit stake, and cancel it to verify the full flow.
 - [ ] Update the frontend configuration with the new mainnet contract IDs and network.
 
-## Contract Account Minimum Balance & Deployment Buffer
+## Verify Deployment — WASM Hash Check
 
-### Rationale
+After deploying to either testnet or mainnet, confirm that the on-chain bytecode matches the
+locally compiled artifact. This is a critical step for financial contracts: it proves that no
+substitution occurred between build and deploy.
 
-Every Stellar account — including the underlying Stellar `AccountEntry` that backs a Soroban contract address — must hold a **minimum balance** derived from the network's *base reserve* to continue to exist on the ledger. As of Protocol 21 the base reserve is **0.5 XLM**, and a bare account requires 2 base reserves = **1 XLM** to remain active. Any operation that would drop an account below this threshold (e.g. a `PAYMENT` sent by the contract during a payout) is aborted at the protocol layer with `op_under_min_balance`.
+### Step 1 — Compute the local hash
 
-If the escrow contract held *exactly* the stake amounts deposited by the players and nothing more, a winner-takes-all payout that sends `2 × stake` out of the contract would leave the account at **0 XLM**, below the 1 XLM minimum. The transfer would abort inside the `finalize_result` / `claim_timeout` / `cancel_match` call with the generic on-chain error `Error::TransferFailed` (code 15), but crucially **the state transition would never be applied** — the match would remain stuck in `PendingResult` / `Active` / `Pending` state and players' funds could not move.
-
-### Required Buffer
-
-To prevent this, the escrow contract address must be topped up with **1.5 XLM (15,000,000 stroops)** of the **native XLM token** immediately after deployment + initialization. This 1.5 XLM is broken down as:
-
-| Component              | Amount    | Purpose                                                                |
-|------------------------|-----------|------------------------------------------------------------------------|
-| Base minimum balance   | 1.0 XLM   | 2 × base reserve — the legal minimum to keep the account on-ledger.   |
-| Operational safety pad | 0.5 XLM   | Extra slack for rent, inclusion fees, and small rebalancing mistakes.  |
-| **Total**              | **1.5 XLM** | Recommended one-time deployment buffer.                                |
-
-> **Why native XLM even if the configured token is USDC?** The Stellar minimum-balance rule always applies in XLM regardless of which SAC token the contract is configured to escrow. USDC held in the contract does **not** count toward the XLM reserve requirement. You must therefore always fund the contract address with at least 1.5 XLM of native lumens *in addition to* the USDC stakes that players deposit.
-
-### On-Chain Safety Guard
-
-The escrow contract enforces the same 1.5 XLM figure in software via the `ensure_reserve_for_payout` helper (see `ESCROW_RESERVE_BUFFER_STROOPS` in `contracts/escrow/src/lib.rs`). Before it performs any transfer during `finalize_result`, `claim_timeout`, or `cancel_match`, it calls `token.balance(current_contract_address)` and returns the explicit error `Error::InsufficientReserve` (code 26) if `balance - payout < 15_000_000 stroops`. This surfaces a clean, actionable error instead of letting payouts silently fail part-way through.
-
-### Funding the buffer (deploy scripts)
-
-Both `scripts/deploy_testnet.sh` and `scripts/deploy_mainnet.sh` have been updated to perform the 1.5 XLM top-up automatically **after** the `initialize` call. You do not need to run the manual steps below for fresh deploys. They are documented here for reference / manual recovery.
-
-### Funding the buffer (manual)
-
-If you are re-using an existing contract, or if the automatic top-up was skipped, send 1.5 XLM from the deployer (or any funded admin account) directly to the contract's Stellar address:
+Build the contracts in release mode (or locate the build output from CI):
 
 ```bash
-# 1. First convert the contract ID -> its underlying Stellar G-address
-ESCROW_CC="$(grep CONTRACT_ESCROW .env | cut -d= -f2)"
-ESCROW_ADDR="$(stellar contract id address --id "$ESCROW_CC" | tail -1)"
-echo "Escrow Stellar address: $ESCROW_ADDR"
-
-# 2. Build + submit a native payment op for 1.5 XLM = 15,000,000 stroops
-stellar tx build \
-  --source deployer \
-  --operation payment \
-    --source-account deployer \
-    --destination "$ESCROW_ADDR" \
-    --asset native \
-    --amount 15000000 \
-  | stellar tx send --source deployer --network testnet
+cargo build --target wasm32-unknown-unknown --release
 ```
 
-For mainnet, replace `--network testnet` with `--network mainnet` and the mainnet RPC / passphrase flags.
+The compiled artifacts are written to:
 
-### Verifying buffer health
+```
+target/wasm32-unknown-unknown/release/escrow.wasm
+target/wasm32-unknown-unknown/release/oracle.wasm
+```
+
+Compute their SHA-256 hashes:
 
 ```bash
-# Option A: stellar keys balance on the contract's G-address
-stellar keys balance "$ESCROW_ADDR" --network testnet
-# Expected output shows at least 1.5000000 XLM native balance in addition to any SAC tokens held.
+sha256sum \
+  target/wasm32-unknown-unknown/release/escrow.wasm \
+  target/wasm32-unknown-unknown/release/oracle.wasm
+```
 
-# Option B: query the native XLM SAC balance of the contract via the zero-address token
-# (native XLM SAC is conventionally at address = all-zero contract ID)
-NATIVE_XLM_TOKEN="CCGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-stellar contract invoke \
-  --id "$NATIVE_XLM_TOKEN" \
-  --source deployer \
+Example output:
+
+```
+a3f1...  target/wasm32-unknown-unknown/release/escrow.wasm
+9c02...  target/wasm32-unknown-unknown/release/oracle.wasm
+```
+
+### Step 2 — Retrieve the on-chain hash
+
+Use `stellar contract inspect` to read the WASM hash stored on-chain for each deployed
+contract. Replace `<CONTRACT_ID>` and network flags as appropriate.
+
+**Testnet:**
+
+```bash
+stellar contract inspect \
+  --id "$CONTRACT_ESCROW" \
   --network testnet \
   --rpc-url https://soroban-testnet.stellar.org \
-  --network-passphrase "Test SDF Network ; September 2015" \
-  -- balance \
-  --id "$(stellar contract id address --id "$ESCROW_CC")"
+  --network-passphrase "Test SDF Network ; September 2015"
+
+stellar contract inspect \
+  --id "$CONTRACT_ORACLE" \
+  --network testnet \
+  --rpc-url https://soroban-testnet.stellar.org \
+  --network-passphrase "Test SDF Network ; September 2015"
 ```
 
-### Symptoms of a depleted buffer
+**Mainnet:**
 
-If you see the following, the reserve buffer is almost certainly gone:
+```bash
+stellar contract inspect \
+  --id "$CONTRACT_ESCROW" \
+  --network mainnet \
+  --rpc-url https://soroban-mainnet.stellar.org \
+  --network-passphrase "Public Global Stellar Network ; September 2015"
 
-- `finalize_result`, `claim_timeout`, or `cancel_match` return `Error::TransferFailed` (code 15) on stakes that should obviously be covered by the contract.
-- Horizon / RPC reports the contract's account `balance` ≤ 1.0000000 XLM.
-- Attempts to send funds **out** of the contract fail, while deposits **into** the contract still succeed.
+stellar contract inspect \
+  --id "$CONTRACT_ORACLE" \
+  --network mainnet \
+  --rpc-url https://soroban-mainnet.stellar.org \
+  --network-passphrase "Public Global Stellar Network ; September 2015"
+```
 
-The immediate recovery step is to re-fund the contract with another 1.5 XLM (see manual command above) and then re-submit the stuck payout transaction. No other state migration is needed because the contract never advanced the match state when the original transfer aborted.
+The command prints the WASM hash reported by the ledger, for example:
 
-### Oracle contract
+```
+wasm_hash: a3f1...
+```
 
-The oracle contract currently never sends tokens itself, so it does not technically need an XLM buffer. However, best practice is to also send it **0.5 XLM** after deployment, to cover rent payments and any future oracle-initiated operations without another top-up.
+### Step 3 — Compare
+
+The `sha256sum` output for `escrow.wasm` must match the `wasm_hash` field returned by
+`stellar contract inspect` for `CONTRACT_ESCROW`, and likewise for the oracle contract.
+
+**If the hashes match**: the deployed bytecode is byte-for-byte identical to the local build.
+
+**If the hashes do not match**: do not proceed. The on-chain contract does not correspond to the
+audited source. Investigate whether the wrong build artifact was uploaded, or whether the
+contract was upgraded after deployment without updating the local copy.
+
+Add this check to your post-deploy checklist:
+
+```
+- [ ] sha256sum of escrow.wasm matches CONTRACT_ESCROW wasm_hash on-chain
+- [ ] sha256sum of oracle.wasm matches CONTRACT_ORACLE wasm_hash on-chain
+```
 
 ## Troubleshooting
 

@@ -698,3 +698,224 @@ fn test_e2e_event_sequence_full_lifecycle() {
     assert_eq!(ev_completed_id, match_id);
     assert_eq!(ev_winner, Winner::Player1);
 }
+
+// ---------------------------------------------------------------------------
+// Issue #1123 — E2E: override_result then finalize_result payout path
+// ---------------------------------------------------------------------------
+//
+// Scenario:
+//   1. Oracle submits Player1 wins → match enters PendingResult.
+//   2. Admin calls override_result to change the winner to Player2.
+//   3. Advance ledger past DISPUTE_WINDOW_LEDGERS (17 280).
+//   4. Anyone calls finalize_result → payout executes.
+//   5. Assert Player2 receives the full pot; Player1 receives nothing extra.
+
+/// E2E test: oracle submits Player1 wins, admin overrides to Player2 wins,
+/// dispute window expires, finalize executes the overridden payout to Player2.
+#[test]
+fn test_e2e_override_result_then_finalize_payout_to_player2() {
+    let (env, contract_id, oracle, player1, player2, token, admin) = setup_e2e();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let stake: i128 = 200;
+    let game_id = String::from_str(&env, "e2e-override-finalize");
+
+    // ── Step 1: Create and fund the match ────────────────────────────────────
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &stake,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    );
+    client.deposit(&match_id, &player1);
+    client.deposit(&match_id, &player2);
+
+    assert_eq!(client.get_match(&match_id).state, MatchState::Active);
+    assert_eq!(client.get_escrow_balance(&match_id), stake * 2);
+
+    // Snapshot balances after both deposits (each player deposited `stake`)
+    let p1_after_deposit = token_client.balance(&player1);
+    let p2_after_deposit = token_client.balance(&player2);
+
+    // ── Step 2: Oracle submits Player1 wins ─────────────────────────────────
+    client.submit_result(&match_id, &game_id, &Winner::Player1, &oracle);
+
+    let m = client.get_match(&match_id);
+    assert_eq!(m.state, MatchState::PendingResult);
+    assert_eq!(m.pending_winner, OptionalWinner::Some(Winner::Player1));
+
+    // Balances must be unchanged — no payout yet
+    assert_eq!(token_client.balance(&player1), p1_after_deposit);
+    assert_eq!(token_client.balance(&player2), p2_after_deposit);
+
+    // ── Step 3: Admin overrides to Player2 wins ─────────────────────────────
+    client.override_result(&match_id, &Winner::Player2, &admin);
+
+    let m = client.get_match(&match_id);
+    assert_eq!(m.state, MatchState::PendingResult, "state must remain PendingResult after override");
+    assert_eq!(
+        m.pending_winner,
+        OptionalWinner::Some(Winner::Player2),
+        "pending_winner must reflect the overridden result"
+    );
+
+    // Balances still unchanged — still within dispute window
+    assert_eq!(token_client.balance(&player1), p1_after_deposit);
+    assert_eq!(token_client.balance(&player2), p2_after_deposit);
+
+    // ── Step 4: Advance ledger past the dispute window ───────────────────────
+    // DISPUTE_WINDOW_LEDGERS = 17_280; advance by 17_281 to clear the boundary.
+    let current = env.ledger().sequence();
+    env.ledger().set_sequence_number(current + 17_281);
+
+    // ── Step 5: Finalize result — payout goes to Player2 ────────────────────
+    client.finalize_result(&match_id);
+
+    // ── Verify state ─────────────────────────────────────────────────────────
+    let m = client.get_match(&match_id);
+    assert_eq!(m.state, MatchState::Completed, "match must be Completed after finalize");
+
+    // Player2 receives the full pot (2 × stake); Player1 receives nothing
+    assert_eq!(
+        token_client.balance(&player2),
+        p2_after_deposit + stake * 2,
+        "Player2 must receive the full pot after the overridden finalize"
+    );
+    assert_eq!(
+        token_client.balance(&player1),
+        p1_after_deposit,
+        "Player1 must receive nothing after losing the override"
+    );
+
+    // Escrow must be empty
+    assert_eq!(client.get_escrow_balance(&match_id), 0);
+
+    // ── Verify completed event carries the overridden winner ─────────────────
+    let events = env.events().all();
+    let completed_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        soroban_sdk::symbol_short!("completed").into_val(&env),
+    ];
+    let (_, _, data) = events
+        .iter()
+        .find(|(_, t, _)| *t == completed_topics)
+        .expect("completed event must be emitted by finalize_result");
+    let (ev_id, ev_winner, ev_payout): (u64, Winner, i128) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_id, match_id);
+    assert_eq!(ev_winner, Winner::Player2, "event winner must be the overridden value");
+    assert_eq!(ev_payout, stake * 2);
+}
+
+/// E2E test: oracle submits Draw, admin overrides to Player1 wins,
+/// finalize pays Player1 the full pot.
+#[test]
+fn test_e2e_override_draw_to_player1_wins() {
+    let (env, contract_id, oracle, player1, player2, token, admin) = setup_e2e();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let stake: i128 = 150;
+    let game_id = String::from_str(&env, "e2e-override-draw-p1");
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &stake,
+        &token,
+        &game_id,
+        &Platform::ChessDotCom,
+    );
+    client.deposit(&match_id, &player1);
+    client.deposit(&match_id, &player2);
+
+    // Oracle submits Draw
+    client.submit_result(&match_id, &game_id, &Winner::Draw, &oracle);
+    assert_eq!(client.get_match(&match_id).pending_winner, OptionalWinner::Some(Winner::Draw));
+
+    // Admin overrides to Player1
+    client.override_result(&match_id, &Winner::Player1, &admin);
+    assert_eq!(
+        client.get_match(&match_id).pending_winner,
+        OptionalWinner::Some(Winner::Player1)
+    );
+
+    // Advance past dispute window and finalize
+    let current = env.ledger().sequence();
+    env.ledger().set_sequence_number(current + 17_281);
+    client.finalize_result(&match_id);
+
+    assert_eq!(client.get_match(&match_id).state, MatchState::Completed);
+    // Player1 wins the full pot
+    assert_eq!(token_client.balance(&player1), 1_000 + stake); // net gain = stake
+    assert_eq!(token_client.balance(&player2), 1_000 - stake); // net loss = stake
+    assert_eq!(client.get_escrow_balance(&match_id), 0);
+}
+
+/// E2E test: verify that override_result is rejected once the dispute window
+/// has expired — callers must use finalize_result after the window closes.
+#[test]
+fn test_e2e_override_result_rejected_after_window_expires() {
+    let (env, contract_id, oracle, player1, player2, token, admin) = setup_e2e();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_id = String::from_str(&env, "e2e-override-expired");
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    );
+    client.deposit(&match_id, &player1);
+    client.deposit(&match_id, &player2);
+    client.submit_result(&match_id, &game_id, &Winner::Player1, &oracle);
+
+    // Advance past the dispute window
+    let current = env.ledger().sequence();
+    env.ledger().set_sequence_number(current + 17_281);
+
+    // override_result must now be rejected
+    assert_eq!(
+        client.try_override_result(&match_id, &Winner::Player2, &admin),
+        Err(Ok(Error::DisputeWindowActive)),
+        "override_result must fail after the dispute window has expired"
+    );
+}
+
+/// E2E test: finalize_result is rejected while the dispute window is still open.
+#[test]
+fn test_e2e_finalize_result_rejected_during_dispute_window() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup_e2e();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_id = String::from_str(&env, "e2e-finalize-window-open");
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    );
+    client.deposit(&match_id, &player1);
+    client.deposit(&match_id, &player2);
+    client.submit_result(&match_id, &game_id, &Winner::Player1, &oracle);
+
+    // Dispute window is still open — finalize must be rejected
+    assert_eq!(
+        client.try_finalize_result(&match_id),
+        Err(Ok(Error::DisputeWindowActive)),
+        "finalize_result must be rejected while the dispute window is open"
+    );
+
+    // Match must still be PendingResult
+    assert_eq!(client.get_match(&match_id).state, MatchState::PendingResult);
+}
