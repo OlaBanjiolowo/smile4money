@@ -1,9 +1,17 @@
-import { ClaimBurn } from './components/claim-burn';
-import { NetworkBadge } from './components/NetworkBadge';
-import { History } from './pages/History';
+import React, { lazy, Suspense } from 'react';
 import { useStellarWallet } from './hooks/useStellarWallet';
 import { useTheme } from './hooks/useTheme';
 import type { WalletStatus } from './types';
+
+const ClaimBurn = lazy(() =>
+  import('./components/claim-burn').then((m) => ({ default: m.ClaimBurn })),
+);
+const NetworkBadge = lazy(() =>
+  import('./components/NetworkBadge').then((m) => ({ default: m.NetworkBadge })),
+);
+const History = lazy(() =>
+  import('./pages/History').then((m) => ({ default: m.History })),
+);
 
 export function App() {
   const { status, address, balance, network, connect, disconnect, refreshBalance } =
@@ -115,36 +123,44 @@ export function App() {
   };
 
   return (
-    <main className="dark:bg-slate-950 dark:text-slate-100 min-h-screen bg-gray-100 px-4 py-6 text-slate-900 transition-colors">
-      <div className="mx-auto mb-4 flex max-w-2xl items-center justify-between">
-        <NetworkBadge />
-        <button
-          type="button"
-          onClick={toggle}
-          aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-          className="dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-        >
-          {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
-        </button>
-      </div>
-      <div className="grid gap-6 lg:grid-cols-[1fr_420px]">
-        <div>
-          <ClaimBurn
-            walletState={walletState}
-            onConnect={connect}
-            onDisconnect={disconnect}
-            onRefreshBalance={refreshBalance}
-            onClaim={handleClaim}
-            onBurn={handleBurn}
-            publicKey={address}
-            balance={balance}
-            expectedNetwork="testnet"
-          />
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center bg-gray-100 dark:bg-slate-950">
+          <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-300 border-t-slate-700" />
         </div>
-        <div>
-          <History walletState={walletState} publicKey={address} />
+      }
+    >
+      <main className="dark:bg-slate-950 dark:text-slate-100 min-h-screen bg-gray-100 px-4 py-6 text-slate-900 transition-colors">
+        <div className="mx-auto mb-4 flex max-w-2xl items-center justify-between">
+          <NetworkBadge />
+          <button
+            type="button"
+            onClick={toggle}
+            aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+            className="dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+          >
+            {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
+          </button>
         </div>
-      </div>
-    </main>
+        <div className="grid gap-6 lg:grid-cols-[1fr_420px]">
+          <div>
+            <ClaimBurn
+              walletState={walletState}
+              onConnect={connect}
+              onDisconnect={disconnect}
+              onRefreshBalance={refreshBalance}
+              onClaim={handleClaim}
+              onBurn={handleBurn}
+              publicKey={address}
+              balance={balance}
+              expectedNetwork="testnet"
+            />
+          </div>
+          <div>
+            <History walletState={walletState} publicKey={address} />
+          </div>
+        </div>
+      </main>
+    </Suspense>
   );
 }
