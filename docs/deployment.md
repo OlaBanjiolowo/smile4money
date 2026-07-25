@@ -6,6 +6,14 @@ This document covers end-to-end deployment of smile4money contracts to Stellar t
 
 Every CI build on the `master` branch uploads the compiled WASM binaries as a downloadable artifact. This allows you to verify that a deployed contract matches a specific commit's source code.
 
+### Reproducible Builds
+
+All WASM builds use a pinned Docker image (`stellar/soroban-rust:21.0.0`) to ensure reproducibility. This means:
+
+- The same source code will always produce identical WASM bytecode
+- Different machines will produce the same hashes
+- Contract users can verify deployed bytecode matches the source
+
 ### Downloading an artifact
 
 1. Navigate to the [Actions tab](https://github.com/{{repo}}/actions) on GitHub.
@@ -33,6 +41,23 @@ stellar contract inspect \
 ```
 
 The WASM hash displayed by `stellar contract inspect` should match the `sha256sum` output for the corresponding artifact file, confirming the deployed bytecode matches the source at that commit.
+
+### Local Reproducible Build
+
+To reproduce the build locally and verify it matches CI:
+
+```bash
+# Checkout the target commit
+git checkout <commit-sha>
+
+# Build using the same pinned Docker image as CI
+docker run --rm -v "$(pwd):/workspace" -w /workspace stellar/soroban-rust:21.0.0 cargo build --release --target wasm32-unknown-unknown
+
+# Compare the hash with the CI artifact
+sha256sum target/wasm32-unknown-unknown/release/*.wasm
+```
+
+The local build should produce identical hashes to the CI artifact.
 
 ## Prerequisites
 
