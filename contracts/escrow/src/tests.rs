@@ -1,6 +1,7 @@
 extern crate std;
 use super::*;
 use soroban_sdk::{
+    contract, contractimpl,
     testutils::{
         storage::Instance as _,
         storage::Persistent as _,
@@ -29,6 +30,13 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&oracle, &admin, &token_addr);
+
+    // Fund the contract with the required reserve buffer.
+    // `ensure_reserve_for_payout` requires the post-payout balance to stay
+    // above ESCROW_RESERVE_BUFFER_STROOPS (1.5 XLM worth of stroops). Without
+    // this top-up, every payout-style test leaving the contract at a near-zero
+    // balance would fail with Error::InsufficientReserve.
+    asset_client.mint(&contract_id, &crate::ESCROW_RESERVE_BUFFER_STROOPS);
 
     // Approve the escrow contract for both players (needed for allowance check)
     let expiration = env.ledger().sequence() + 1000000;
@@ -377,6 +385,9 @@ fn test_cancel_with_both_deposits_requires_both_auth() {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&oracle, &admin, &token_addr);
+
+    // Fund reserve buffer (matches setup() helper — see ensure_reserve_for_payout)
+    asset_client.mint(&contract_id, &crate::ESCROW_RESERVE_BUFFER_STROOPS);
 
     // Approve the escrow contract for both players
     let expiration = env.ledger().sequence() + 1000000;
@@ -2159,7 +2170,9 @@ fn test_emergency_drain_succeeds_when_paused() {
     );
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    assert_eq!(token_client.balance(&contract_id), 200);
+    // Total contract balance = stakes (200) + reserve buffer (15_000_000) minted in setup()
+    let total_expected = 200 + crate::ESCROW_RESERVE_BUFFER_STROOPS;
+    assert_eq!(token_client.balance(&contract_id), total_expected);
 
     client.pause();
 
@@ -2170,7 +2183,7 @@ fn test_emergency_drain_succeeds_when_paused() {
     let events = env.events().all();
 
     assert_eq!(token_client.balance(&contract_id), 0);
-    assert_eq!(token_client.balance(&safe), 200);
+    assert_eq!(token_client.balance(&safe), total_expected);
 
     // Verify drain event
     let drain_event = events.iter().find(|(_, t, _)| {

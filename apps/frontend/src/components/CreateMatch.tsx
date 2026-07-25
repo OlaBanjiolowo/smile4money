@@ -3,19 +3,21 @@ import { Address, Networks } from '@stellar/stellar-sdk';
 
 type Platform = 'lichess' | 'chesscom';
 type TokenType = 'xlm' | 'usdc';
-type Status = 'idle' | 'pending' | 'success' | 'error';
+type Status = 'idle' | 'validating' | 'pending' | 'success' | 'error';
 
 interface CreateMatchProps {
   contractId: string;
   player1Address: string | null;
   networkPassphrase?: string;
   rpcUrl?: string;
+  apiBaseUrl?: string;
   onCreateMatch?: (data: {
     player2: string;
     stakeAmount: string;
     token: TokenType;
     gameId: string;
     platform: Platform;
+    platformUsername?: string;
   }) => Promise<string>;
 }
 
@@ -24,12 +26,15 @@ interface FormData {
   stakeAmount: string;
   gameId: string;
   platform: Platform;
+  platformUsername: string;
 }
 
 interface FormErrors {
   player2?: string;
   stakeAmount?: string;
   gameId?: string;
+  platformUsername?: string;
+  gameValidation?: string;
 }
 
 const NETWORK_PASSPHRASES: Record<string, string> = {
@@ -73,7 +78,64 @@ function validateForm(data: FormData): FormErrors {
     errors.gameId = 'Game ID is required';
   }
 
+  if (data.platform === 'chesscom' && !data.platformUsername.trim()) {
+    errors.platformUsername =
+      'Chess.com username is required to validate the game exists in player archives';
+  }
+
   return errors;
+}
+
+interface ValidateGameResponse {
+  valid: boolean;
+  platform: string;
+  gameId: string;
+  status?: string;
+  whitePlayer?: string;
+  blackPlayer?: string;
+  result?: string | null;
+  message?: string;
+  error?: string;
+  details?: string;
+}
+
+async function validateGameOnPlatform(
+  apiBaseUrl: string,
+  platform: Platform,
+  gameId: string,
+  platformUsername?: string,
+): Promise<{ valid: boolean; message?: string }> {
+  const endpoint = `${apiBaseUrl.replace(/\/$/, '')}/api/validate-game`;
+  const backendPlatform = platform === 'chesscom' ? 'chessdotcom' : platform;
+
+  const payload: Record<string, string> = {
+    gameId,
+    platform: backendPlatform,
+  };
+  if (platform === 'chesscom' && platformUsername) {
+    payload.username = platformUsername;
+  }
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = (await response.json()) as ValidateGameResponse;
+
+  if (response.ok && data.valid) {
+    return { valid: true };
+  }
+
+  const msg =
+    data.message ||
+    data.error ||
+    data.details ||
+    `Game validation failed with status ${response.status}`;
+  return { valid: false, message: msg };
 }
 
 export function CreateMatch({
@@ -81,6 +143,7 @@ export function CreateMatch({
   player1Address,
   networkPassphrase = Networks.TESTNET,
   rpcUrl = 'https://soroban-testnet.stellar.org',
+  apiBaseUrl = '/',
   onCreateMatch,
 }: CreateMatchProps) {
   const [formData, setFormData] = useState<FormData>({
@@ -88,6 +151,7 @@ export function CreateMatch({
     stakeAmount: '',
     gameId: '',
     platform: 'lichess',
+    platformUsername: '',
   });
   const [errors, setErrors] = useState<FormErrors>({});
   const [status, setStatus] = useState<Status>('idle');
@@ -95,17 +159,22 @@ export function CreateMatch({
   const [matchId, setMatchId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
 
-  function updateField(key: 'player2' | 'stakeAmount' | 'gameId' | 'platform', value: string) {
+  function updateField(
+    key: 'player2' | 'stakeAmount' | 'gameId' | 'platform' | 'platformUsername',
+    value: string,
+  ) {
     const next = { ...formData, [key]: value } as FormData;
     setFormData(next);
-    // Clear error for this field when user types
     if (errors[key as keyof FormErrors]) {
       setErrors((prev) => ({ ...prev, [key]: undefined }));
+    }
+    if (key === 'platform' || key === 'gameId' || key === 'platformUsername') {
+      setErrors((prev) => ({ ...prev, gameValidation: undefined }));
     }
   }
 
   function validateAndUpdate(
-    key: 'player2' | 'stakeAmount' | 'gameId' | 'platform',
+    key: 'player2' | 'stakeAmount' | 'gameId' | 'platform' | 'platformUsername',
     value: string,
   ) {
     const next = { ...formData, [key]: value } as FormData;
@@ -131,8 +200,41 @@ export function CreateMatch({
         return;
       }
 
-      setStatus('pending');
+      setStatus('validating');
       setErrorMsg('');
+      setErrors((prev) => ({ ...prev, gameValidation: undefined }));
+
+      try {
+        const validation = await validateGameOnPlatform(
+          apiBaseUrl,
+          formData.platform,
+          formData.gameId,
+          formData.platformUsername || undefined,
+        );
+
+        if (!validation.valid) {
+          setErrors((prev) => ({
+            ...prev,
+            gameValidation:
+              validation.message ||
+              'This game does not exist on the selected platform. Please verify the Game ID and try again.',
+          }));
+          setStatus('error');
+          setErrorMsg(
+            validation.message ||
+              'Game not found on platform. Please check the Game ID and try a valid one.',
+          );
+          return;
+        }
+      } catch (err) {
+        const networkMsg =
+          err instanceof Error ? err.message : 'Could not reach the game validation service';
+        setStatus('error');
+        setErrorMsg(`Unable to validate game: ${networkMsg}`);
+        return;
+      }
+
+      setStatus('pending');
 
       try {
         const result = await onCreateMatch?.({
@@ -141,6 +243,7 @@ export function CreateMatch({
           token,
           gameId: formData.gameId,
           platform: formData.platform,
+          platformUsername: formData.platformUsername || undefined,
         });
 
         if (result) {
@@ -154,7 +257,7 @@ export function CreateMatch({
         setErrorMsg(err instanceof Error ? err.message : 'Failed to create match');
       }
     },
-    [formData, player1Address, token, onCreateMatch],
+    [formData, player1Address, token, apiBaseUrl, onCreateMatch],
   );
 
   function resetForm() {
@@ -163,6 +266,7 @@ export function CreateMatch({
       stakeAmount: '',
       gameId: '',
       platform: 'lichess',
+      platformUsername: '',
     });
     setErrors({});
     setStatus('idle');
@@ -170,7 +274,9 @@ export function CreateMatch({
     setErrorMsg('');
   }
 
+  const isBusy = status === 'validating' || status === 'pending';
   const isSubmitting = status === 'pending';
+  const isValidating = status === 'validating';
   const hasErrors = Object.keys(errors).length > 0;
 
   return (
@@ -230,7 +336,7 @@ export function CreateMatch({
               value={formData.player2}
               onChange={(e) => validateAndUpdate('player2', e.target.value)}
               placeholder="G..."
-              disabled={isSubmitting}
+              disabled={isBusy}
               data-testid="player2-input"
               aria-invalid={!!errors.player2}
             />
@@ -251,7 +357,7 @@ export function CreateMatch({
               step="any"
               value={formData.stakeAmount}
               onChange={(e) => validateAndUpdate('stakeAmount', e.target.value)}
-              disabled={isSubmitting}
+              disabled={isBusy}
               placeholder="0.00"
               data-testid="stake-amount-input"
               aria-invalid={!!errors.stakeAmount}
@@ -271,10 +377,10 @@ export function CreateMatch({
               type="text"
               value={formData.gameId}
               onChange={(e) => updateField('gameId', e.target.value)}
-              disabled={isSubmitting}
+              disabled={isBusy}
               placeholder="Enter game ID from platform"
               data-testid="game-id-input"
-              aria-invalid={!!errors.gameId}
+              aria-invalid={!!errors.gameId || !!errors.gameValidation}
             />
             {errors.gameId && (
               <span className="error-message" data-testid="game-id-error">
@@ -282,6 +388,33 @@ export function CreateMatch({
               </span>
             )}
           </div>
+
+          {/* Platform Username (required for chess.com) */}
+          {formData.platform === 'chesscom' && (
+            <div className="form-group">
+              <label htmlFor="platform-username">
+                Chess.com Username <span className="required-hint">(required)</span>
+              </label>
+              <input
+                id="platform-username"
+                type="text"
+                value={formData.platformUsername}
+                onChange={(e) => validateAndUpdate('platformUsername', e.target.value)}
+                disabled={isBusy}
+                placeholder="Your Chess.com username to verify game in archives"
+                data-testid="platform-username-input"
+                aria-invalid={!!errors.platformUsername}
+              />
+              {errors.platformUsername && (
+                <span className="error-message" data-testid="platform-username-error">
+                  {errors.platformUsername}
+                </span>
+              )}
+              <small className="field-hint">
+                Chess.com requires a player username to look up the game in their archives.
+              </small>
+            </div>
+          )}
 
           {/* Platform Selector */}
           <div className="form-group">
@@ -293,6 +426,7 @@ export function CreateMatch({
                 onClick={() => updateField('platform', 'lichess')}
                 aria-pressed={formData.platform === 'lichess'}
                 data-testid="platform-lichess"
+                disabled={isBusy}
               >
                 Lichess
               </button>
@@ -302,25 +436,42 @@ export function CreateMatch({
                 onClick={() => updateField('platform', 'chesscom')}
                 aria-pressed={formData.platform === 'chesscom'}
                 data-testid="platform-chesscom"
+                disabled={isBusy}
               >
                 Chess.com
               </button>
             </div>
           </div>
 
+          {/* Game validation info / errors */}
+          {errors.gameValidation && (
+            <div className="validation-feedback error" role="alert" data-testid="game-validation-error">
+              <strong>Game not found:</strong> {errors.gameValidation}
+            </div>
+          )}
+          {isValidating && (
+            <div className="validation-feedback info" data-testid="game-validating">
+              Verifying game exists on {formData.platform === 'lichess' ? 'Lichess' : 'Chess.com'}…
+            </div>
+          )}
+
           {/* Submit Button */}
           <button
             type="submit"
             className="btn btn-submit"
-            disabled={isSubmitting || hasErrors}
+            disabled={isBusy || hasErrors}
             data-testid="submit-match-btn"
-            aria-busy={isSubmitting}
+            aria-busy={isBusy}
           >
-            {isSubmitting ? 'Creating Match…' : 'Create Match'}
+            {isValidating
+              ? 'Validating Game…'
+              : isSubmitting
+                ? 'Creating Match…'
+                : 'Create Match'}
           </button>
 
           {/* Error Message */}
-          {status === 'error' && (
+          {status === 'error' && !errors.gameValidation && (
             <p className="feedback error" role="alert" data-testid="create-match-error">
               {errorMsg}
             </p>
