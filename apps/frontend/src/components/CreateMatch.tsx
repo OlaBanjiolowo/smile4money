@@ -5,12 +5,20 @@ type Platform = 'lichess' | 'chesscom';
 type TokenType = 'xlm' | 'usdc';
 type Status = 'idle' | 'validating' | 'pending' | 'success' | 'error';
 
+// Stellar stroop bounds for stake_amount.
+// 1 stroop is the minimum transferable unit; the contract enforces an upper
+// cap of 10 trillion stroops to guard against overflow edge cases.
+const MIN_STAKE_STROOPS = 1n;
+const MAX_STAKE_STROOPS = 10_000_000_000_000n;
+
 interface CreateMatchProps {
   contractId: string;
   player1Address: string | null;
   networkPassphrase?: string;
   rpcUrl?: string;
   apiBaseUrl?: string;
+  /** Pre-known game IDs that already have a match; duplicates are rejected. */
+  knownGameIds?: string[];
   onCreateMatch?: (data: {
     player2: string;
     stakeAmount: string;
@@ -68,9 +76,17 @@ function validateForm(data: FormData, knownGameIds: string[] = []): FormErrors {
   if (!data.stakeAmount.trim()) {
     errors.stakeAmount = 'Stake amount is required';
   } else {
-    const amount = Number(data.stakeAmount);
-    if (isNaN(amount) || amount <= 0) {
-      errors.stakeAmount = 'Stake amount must be a positive number';
+    const raw = data.stakeAmount.trim();
+    // Reject fractional values — stake_amount is always a whole-number stroop count.
+    if (!/^\d+$/.test(raw)) {
+      errors.stakeAmount = 'Stake amount must be a whole number of stroops';
+    } else {
+      const amount = BigInt(raw);
+      if (amount < MIN_STAKE_STROOPS) {
+        errors.stakeAmount = `Stake amount must be at least 1 stroop`;
+      } else if (amount > MAX_STAKE_STROOPS) {
+        errors.stakeAmount = `Stake amount must be at most ${MAX_STAKE_STROOPS.toLocaleString()} stroops`;
+      }
     }
   }
 
@@ -148,6 +164,7 @@ export function CreateMatch({
   networkPassphrase = Networks.TESTNET,
   rpcUrl = 'https://soroban-testnet.stellar.org',
   apiBaseUrl = '/',
+  knownGameIds = [],
   onCreateMatch,
 }: CreateMatchProps) {
   const [formData, setFormData] = useState<FormData>({
@@ -261,7 +278,7 @@ export function CreateMatch({
         setErrorMsg(err instanceof Error ? err.message : 'Failed to create match');
       }
     },
-    [formData, player1Address, token, apiBaseUrl, onCreateMatch],
+    [formData, player1Address, token, apiBaseUrl, knownGameIds, onCreateMatch],
   );
 
   function resetForm() {
@@ -281,7 +298,9 @@ export function CreateMatch({
   const isBusy = status === 'validating' || status === 'pending';
   const isSubmitting = status === 'pending';
   const isValidating = status === 'validating';
-  const hasErrors = Object.keys(errors).length > 0;
+  // Filter out keys whose value is undefined (e.g. cleared gameValidation)
+  // so that `{gameValidation: undefined}` does not count as having errors.
+  const hasErrors = Object.values(errors).some((v) => v !== undefined);
 
   return (
     <div className="create-match" data-testid="create-match">
@@ -353,16 +372,17 @@ export function CreateMatch({
 
           {/* Stake Amount */}
           <div className="form-group">
-            <label htmlFor="stake-amount">Stake Amount ({token.toUpperCase()})</label>
+            <label htmlFor="stake-amount">Stake Amount (stroops)</label>
             <input
               id="stake-amount"
               type="number"
-              min="0"
-              step="any"
+              min="1"
+              max="10000000000000"
+              step="1"
               value={formData.stakeAmount}
               onChange={(e) => validateAndUpdate('stakeAmount', e.target.value)}
               disabled={isBusy}
-              placeholder="0.00"
+              placeholder="e.g. 10000000 (= 1 XLM)"
               data-testid="stake-amount-input"
               aria-invalid={!!errors.stakeAmount}
             />

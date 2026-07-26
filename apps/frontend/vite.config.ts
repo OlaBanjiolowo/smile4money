@@ -13,7 +13,9 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: './src/test-setup.ts',
-    css: false,
+    // css: false was removed — keep CSS processing enabled so that importing a
+    // non-existent CSS module fails the test immediately rather than silently
+    // succeeding. CI will catch missing CSS imports as a Vite transform error.
     coverage: {
       provider: 'v8',
       // Collect coverage only from source files (not test helpers or generated files)

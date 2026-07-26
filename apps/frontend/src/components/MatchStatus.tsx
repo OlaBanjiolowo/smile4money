@@ -24,6 +24,16 @@ interface MatchData {
   player1Deposited?: boolean;
   /** Whether player2 had already deposited before cancellation. */
   player2Deposited?: boolean;
+  /**
+   * The ledger sequence number at which `submit_result` was called.
+   * Set when state is PendingResult; 0 when no result has been submitted.
+   */
+  pendingResultLedger?: number;
+  /**
+   * The ledger sequence number at the time this data was fetched.
+   * Used together with pendingResultLedger to compute the dispute countdown.
+   */
+  currentLedger?: number;
 }
 
 interface MatchStatusProps {
@@ -37,6 +47,46 @@ interface MatchStatusProps {
 type FetchStatus = 'idle' | 'loading' | 'error';
 
 const TERMINAL_STATES: MatchState[] = ['Completed', 'Cancelled'];
+
+/**
+ * Must match `DISPUTE_WINDOW_LEDGERS` in `contracts/escrow/src/lib.rs`.
+ * 17 280 ledgers × 5 s / ledger = 86 400 s = 24 hours.
+ */
+const DISPUTE_WINDOW_LEDGERS = 17_280;
+
+/** Average Stellar ledger close time in seconds. */
+const LEDGER_CLOSE_SECS = 5;
+
+/**
+ * Compute how many seconds remain in the dispute window.
+ *
+ * @param pendingResultLedger  The ledger at which submit_result was called.
+ * @param currentLedger        The ledger number at fetch time.
+ * @param elapsedSeconds       Real-time seconds elapsed since the data was fetched.
+ * @returns Remaining seconds (>= 0); returns 0 when the window has already closed.
+ */
+function computeDisputeSecondsRemaining(
+  pendingResultLedger: number,
+  currentLedger: number,
+  elapsedSeconds: number,
+): number {
+  const ledgersRemaining = pendingResultLedger + DISPUTE_WINDOW_LEDGERS - currentLedger;
+  const secondsFromLedgers = ledgersRemaining * LEDGER_CLOSE_SECS;
+  return Math.max(0, secondsFromLedgers - elapsedSeconds);
+}
+
+/** Format a duration given in seconds into a human-readable string. */
+function formatDuration(totalSeconds: number): string {
+  if (totalSeconds <= 0) return 'Available now';
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = Math.floor(totalSeconds % 60);
+  const parts: string[] = [];
+  if (h > 0) parts.push(`${h}h`);
+  if (m > 0 || h > 0) parts.push(`${m}m`);
+  parts.push(`${s}s`);
+  return parts.join(' ');
+}
 
 const NETWORK_PASSPHRASES: Record<string, string> = {
   testnet: Networks.TESTNET,
@@ -53,6 +103,12 @@ export function MatchStatus({
   const [matchData, setMatchData] = useState<MatchData | null>(null);
   const [fetchStatus, setFetchStatus] = useState<FetchStatus>('loading');
   const [errorMessage, setErrorMessage] = useState('');
+  /**
+   * Wall-clock seconds elapsed since matchData was last set.
+   * Used to advance the dispute-window countdown without requiring another RPC
+   * round-trip every second.
+   */
+  const [elapsedSecs, setElapsedSecs] = useState(0);
 
   const fetchMatch = useCallback(async () => {
     if (!matchId) return;
@@ -61,6 +117,9 @@ export function MatchStatus({
       const data = await onFetchMatch?.(matchId);
       if (data) {
         setMatchData(data);
+        // Reset the elapsed-seconds counter whenever we get fresh data so the
+        // countdown stays in sync with the on-chain ledger estimate.
+        setElapsedSecs(0);
       }
       setFetchStatus('idle');
     } catch (err) {
@@ -84,6 +143,17 @@ export function MatchStatus({
     const interval = setInterval(fetchMatch, 5000);
     return () => clearInterval(interval);
   }, [matchId, fetchMatch, matchData]);
+
+  // Tick every second while in PendingResult to keep the countdown live.
+  // The ticker is intentionally separate from the polling interval so it can
+  // run at 1 s resolution without hammering the RPC every second.
+  useEffect(() => {
+    if (matchData?.state !== 'PendingResult') return;
+    const ticker = setInterval(() => {
+      setElapsedSecs((s) => s + 1);
+    }, 1000);
+    return () => clearInterval(ticker);
+  }, [matchData?.state]);
 
   // No match ID
   if (!matchId) {
@@ -186,7 +256,41 @@ export function MatchStatus({
           </div>
         );
 
-      case 'PendingResult':
+      case 'PendingResult': {
+        // Compute dispute window countdown from on-chain ledger data when available.
+        let countdownEl: React.ReactNode = null;
+        if (
+          matchData.pendingResultLedger !== undefined &&
+          matchData.pendingResultLedger > 0 &&
+          matchData.currentLedger !== undefined &&
+          matchData.currentLedger > 0
+        ) {
+          const secsRemaining = computeDisputeSecondsRemaining(
+            matchData.pendingResultLedger,
+            matchData.currentLedger,
+            elapsedSecs,
+          );
+          const isAvailable = secsRemaining <= 0;
+          countdownEl = (
+            <p
+              className={`dispute-countdown ${isAvailable ? 'available' : 'pending'}`}
+              data-testid="dispute-countdown"
+              aria-live="polite"
+            >
+              {isAvailable ? (
+                <>Payout available — <strong>finalize_result can be called now</strong></>
+              ) : (
+                <>
+                  Payout available in{' '}
+                  <strong data-testid="dispute-countdown-value">
+                    ~{formatDuration(secsRemaining)}
+                  </strong>
+                </>
+              )}
+            </p>
+          );
+        }
+
         return (
           <div className="state-content pending-result" data-testid="state-pending-result">
             <h3 className="state-title">Result Pending</h3>
@@ -205,8 +309,10 @@ export function MatchStatus({
                 </strong>
               </p>
             )}
+            {countdownEl}
           </div>
         );
+      }
 
       case 'Completed':
         if (!matchData.winner) {
