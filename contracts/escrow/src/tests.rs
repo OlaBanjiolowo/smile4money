@@ -12,7 +12,7 @@ use soroban_sdk::{
     vec, Address, Env, IntoVal, String, Symbol, TryFromVal,
 };
 
-fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
+fn setup() -> (Env, Address, Address, Address, Address, Address, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -20,6 +20,7 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     let oracle = Address::generate(&env);
     let player1 = Address::generate(&env);
     let player2 = Address::generate(&env);
+    let safe_address = Address::generate(&env);
 
     let token_id = env.register_stellar_asset_contract_v2(admin.clone());
     let token_addr = token_id.address();
@@ -29,7 +30,7 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
 
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.initialize(&oracle, &admin, &token_addr);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address);
 
     // Fund the contract with the required reserve buffer.
     // `ensure_reserve_for_payout` requires the post-payout balance to stay
@@ -52,12 +53,13 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         player2,
         token_addr,
         admin,
+        safe_address,
     )
 }
 
 #[test]
 fn test_create_match() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -87,7 +89,7 @@ fn test_get_match_not_found() {
 
 #[test]
 fn test_deposit_invalid_match_id_u64_max() {
-    let (env, contract_id, _oracle, player1, _player2, _token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, _player2, _token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     assert_eq!(
         client.try_deposit(&u64::MAX, &player1),
@@ -97,7 +99,7 @@ fn test_deposit_invalid_match_id_u64_max() {
 
 #[test]
 fn test_deposit_invalid_match_id_beyond_count() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     // Create one match (id = 0), then try to deposit into match 1 which doesn't exist
     client.create_match(
@@ -116,7 +118,7 @@ fn test_deposit_invalid_match_id_beyond_count() {
 
 #[test]
 fn test_cancel_match_invalid_match_id_u64_max() {
-    let (env, contract_id, _oracle, player1, _player2, _token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, _player2, _token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     assert_eq!(
         client.try_cancel_match(&u64::MAX, &player1),
@@ -126,7 +128,7 @@ fn test_cancel_match_invalid_match_id_u64_max() {
 
 #[test]
 fn test_cancel_match_invalid_match_id_beyond_count() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     client.create_match(
         &player1,
@@ -144,7 +146,7 @@ fn test_cancel_match_invalid_match_id_beyond_count() {
 
 #[test]
 fn test_submit_result_invalid_match_id_u64_max() {
-    let (env, contract_id, oracle, _player1, _player2, _token, _admin) = setup();
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     assert_eq!(
         client.try_submit_result(
@@ -159,7 +161,7 @@ fn test_submit_result_invalid_match_id_u64_max() {
 
 #[test]
 fn test_submit_result_invalid_match_id_beyond_count() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     client.create_match(
         &player1,
@@ -192,7 +194,7 @@ fn test_get_match_invalid_match_id_u64_max() {
 
 #[test]
 fn test_get_match_invalid_match_id_beyond_count() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     client.create_match(
         &player1,
@@ -210,7 +212,7 @@ fn test_get_match_invalid_match_id_beyond_count() {
 
 #[test]
 fn test_deposit_and_activate() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -235,7 +237,7 @@ fn test_deposit_and_activate() {
 
 #[test]
 fn test_payout_winner() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -264,7 +266,7 @@ fn test_payout_winner() {
 
 #[test]
 fn test_payout_winner_player2() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -293,7 +295,7 @@ fn test_payout_winner_player2() {
 
 #[test]
 fn test_draw_refund() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -320,7 +322,7 @@ fn test_draw_refund() {
 
 #[test]
 fn test_cancel_refunds_depositor() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -343,7 +345,7 @@ fn test_cancel_refunds_depositor() {
 
 #[test]
 fn test_player2_can_cancel_pending_match() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -384,7 +386,8 @@ fn test_cancel_with_both_deposits_requires_both_auth() {
 
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.initialize(&oracle, &admin, &token_addr);
+    let safe_address = Address::generate(&env);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address);
 
     // Fund reserve buffer (matches setup() helper — see ensure_reserve_for_payout)
     asset_client.mint(&contract_id, &crate::ESCROW_RESERVE_BUFFER_STROOPS);
@@ -422,7 +425,7 @@ fn test_cancel_with_both_deposits_requires_both_auth() {
 
 #[test]
 fn test_cancel_active_match_fails() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -444,7 +447,7 @@ fn test_cancel_active_match_fails() {
 
 #[test]
 fn test_cancel_completed_match_fails() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -472,7 +475,7 @@ fn test_cancel_completed_match_fails() {
 
 #[test]
 fn test_deposit_into_completed_match_fails() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -500,7 +503,7 @@ fn test_deposit_into_completed_match_fails() {
 
 #[test]
 fn test_deposit_after_cancel_returns_match_cancelled() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -521,7 +524,7 @@ fn test_deposit_after_cancel_returns_match_cancelled() {
 
 #[test]
 fn test_non_oracle_cannot_submit_result() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -554,7 +557,7 @@ fn test_non_oracle_cannot_submit_result() {
 fn test_submit_result_random_caller_is_unauthorized() {
     use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
 
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -591,7 +594,7 @@ fn test_submit_result_random_caller_is_unauthorized() {
 // Issue #196: submit_result on a Pending match should return InvalidState
 #[test]
 fn test_submit_result_on_pending_match_fails() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -617,7 +620,7 @@ fn test_submit_result_on_pending_match_fails() {
 // InvalidState (no double-payout)
 #[test]
 fn test_submit_result_on_completed_match_fails() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -650,7 +653,7 @@ fn test_submit_result_on_completed_match_fails() {
 
 #[test]
 fn test_submit_result_wrong_game_id_fails() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -689,13 +692,14 @@ fn test_double_initialize_fails() {
         .address();
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.initialize(&oracle, &admin, &token_addr);
-    client.initialize(&oracle, &admin, &token_addr);
+    let safe_address = Address::generate(&env);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address);
 }
 
 #[test]
 fn test_create_match_zero_stake_fails() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     assert_eq!(
         client.try_create_match(
@@ -712,7 +716,7 @@ fn test_create_match_zero_stake_fails() {
 
 #[test]
 fn test_create_match_self_match_fails() {
-    let (env, contract_id, _oracle, player1, _player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, _player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     assert_eq!(
         client.try_create_match(
@@ -729,7 +733,7 @@ fn test_create_match_self_match_fails() {
 
 #[test]
 fn test_duplicate_game_id_rejected() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let player3 = Address::generate(&env);
     let player4 = Address::generate(&env);
@@ -758,7 +762,7 @@ fn test_duplicate_game_id_rejected() {
 
 #[test]
 fn test_duplicate_game_id_fails() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let player3 = Address::generate(&env);
     let player4 = Address::generate(&env);
@@ -786,7 +790,7 @@ fn test_duplicate_game_id_fails() {
 
 #[test]
 fn test_create_match_empty_game_id_fails() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     assert_eq!(
         client.try_create_match(
@@ -803,7 +807,7 @@ fn test_create_match_empty_game_id_fails() {
 
 #[test]
 fn test_create_match_wrong_token_fails() {
-    let (env, contract_id, _oracle, player1, player2, _token, admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, _token, admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Register a different token contract
@@ -827,7 +831,7 @@ fn test_create_match_wrong_token_fails() {
 #[test]
 #[should_panic(expected = "Error(Contract, #4)")]
 fn test_unauthorized_player_cannot_cancel() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let id = client.create_match(
         &player1,
@@ -843,7 +847,7 @@ fn test_unauthorized_player_cannot_cancel() {
 // Issue #192: deposit by non-player address should return Unauthorized
 #[test]
 fn test_deposit_by_non_player_returns_unauthorized() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -864,7 +868,7 @@ fn test_deposit_by_non_player_returns_unauthorized() {
 // Issue #195: is_funded returns false after only one player deposits, true after both
 #[test]
 fn test_is_funded_false_after_one_deposit() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -884,7 +888,7 @@ fn test_is_funded_false_after_one_deposit() {
 // Issue #818: get_escrow_balance returns stake_amount after only one deposit
 #[test]
 fn test_escrow_balance_after_single_deposit() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -901,7 +905,7 @@ fn test_escrow_balance_after_single_deposit() {
 
 #[test]
 fn test_escrow_balance_stages() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -921,7 +925,7 @@ fn test_escrow_balance_stages() {
 
 #[test]
 fn test_draw_payout_exact_amounts() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -949,7 +953,7 @@ fn test_draw_payout_exact_amounts() {
 
 #[test]
 fn test_update_oracle() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let new_oracle = Address::generate(&env);
 
@@ -988,7 +992,7 @@ fn test_update_oracle() {
 
 #[test]
 fn test_pause_blocks_all_state_changing_operations() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Create a match to test deposit and cancel while paused.
@@ -1065,7 +1069,7 @@ fn test_pause_blocks_all_state_changing_operations() {
 
 #[test]
 fn test_non_admin_cannot_pause() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let non_admin = Address::generate(&env);
 
@@ -1085,7 +1089,7 @@ fn test_non_admin_cannot_pause() {
 
 #[test]
 fn test_non_admin_cannot_unpause() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let non_admin = Address::generate(&env);
 
@@ -1125,7 +1129,7 @@ fn test_is_paused_returns_true_after_pause() {
 
 #[test]
 fn test_pause_unpause_events() {
-    let (env, contract_id, _, _, _, _, admin) = setup();
+    let (env, contract_id, _, _, _, _, admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let expected_pause_ledger_sequence = env.ledger().sequence();
@@ -1169,7 +1173,7 @@ fn test_pause_unpause_events() {
 
 #[test]
 fn test_update_oracle_emits_old_new_and_admin() {
-    let (env, contract_id, oracle, _, _, _, admin) = setup();
+    let (env, contract_id, oracle, _, _, _, admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let new_oracle = Address::generate(&env);
 
@@ -1205,7 +1209,8 @@ fn test_non_admin_cannot_update_oracle() {
         .address();
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.initialize(&oracle, &admin, &token_addr);
+    let safe_address = Address::generate(&env);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address);
 
     use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
     env.mock_auths(&[MockAuth {
@@ -1223,7 +1228,7 @@ fn test_non_admin_cannot_update_oracle() {
 
 #[test]
 fn test_game_id_ttl_set_on_creation() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let game_id = String::from_str(&env, "ttl_game_id");
@@ -1246,7 +1251,7 @@ fn test_game_id_ttl_set_on_creation() {
 
 #[test]
 fn test_ttl_extended_on_state_changes() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -1280,7 +1285,7 @@ fn test_ttl_extended_on_state_changes() {
 
 #[test]
 fn test_create_match_emits_event() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let game_id = String::from_str(&env, "game_ev");
@@ -1314,7 +1319,7 @@ fn test_create_match_emits_event() {
 
 #[test]
 fn test_deposit_emits_event() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -1350,7 +1355,7 @@ fn test_deposit_emits_event() {
 
 #[test]
 fn test_deposit_event_player_label() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -1395,7 +1400,7 @@ fn test_deposit_event_player_label() {
 
 #[test]
 fn test_submit_result_emits_event() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -1434,7 +1439,7 @@ fn test_submit_result_emits_event() {
 
 #[test]
 fn test_cancel_match_emits_event() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -1465,7 +1470,7 @@ fn test_cancel_match_emits_event() {
 // Issue #59: Test that pause() prevents match creation
 #[test]
 fn test_pause_prevents_match_creation() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     client.pause();
@@ -1486,7 +1491,7 @@ fn test_pause_prevents_match_creation() {
 // Issue #60: Test that unpause() re-enables match creation
 #[test]
 fn test_unpause_enables_match_creation() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     client.pause();
@@ -1509,7 +1514,7 @@ fn test_unpause_enables_match_creation() {
 // Issue #61: Test that update_oracle() successfully rotates the oracle address
 #[test]
 fn test_update_oracle_rotates_address() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let new_oracle = Address::generate(&env);
 
@@ -1548,7 +1553,8 @@ fn test_non_admin_cannot_call_admin_functions() {
         .address();
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.initialize(&oracle, &admin, &token_addr);
+    let safe_address = Address::generate(&env);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address);
 
     use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
 
@@ -1589,7 +1595,7 @@ fn test_non_admin_cannot_call_admin_functions() {
 // Issue #55: Multiple matches can be created and tracked independently
 #[test]
 fn test_multiple_matches_independent() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -1668,7 +1674,7 @@ fn test_multiple_matches_independent() {
 // Issue #56: Paused contract blocks deposit as well
 #[test]
 fn test_pause_blocks_deposit() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -1716,7 +1722,7 @@ fn test_pause_blocks_deposit() {
 // Issue #72: submit_result on already Cancelled match should return InvalidState
 #[test]
 fn test_submit_result_on_cancelled_match_fails() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -1748,7 +1754,7 @@ fn test_submit_result_on_cancelled_match_fails() {
 // guarantee is visible for both participants.
 #[test]
 fn test_second_deposit_player2_returns_already_funded() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -1773,7 +1779,7 @@ fn test_second_deposit_player2_returns_already_funded() {
 // Issue #33: Already-deposited player cannot deposit again
 #[test]
 fn test_double_deposit_same_player_fails() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -1794,7 +1800,7 @@ fn test_double_deposit_same_player_fails() {
 // Issue #34: Negative stake_amount is rejected
 #[test]
 fn test_create_match_negative_stake_fails() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     assert_eq!(
         client.try_create_match(
@@ -1812,7 +1818,7 @@ fn test_create_match_negative_stake_fails() {
 // Issue #35: get_escrow_balance returns 0 after match is cancelled with partial deposit
 #[test]
 fn test_escrow_balance_zero_after_cancel() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -1837,7 +1843,7 @@ fn test_escrow_balance_zero_after_cancel() {
 // cancel after both have committed funds. The only valid exit is submit_result by the oracle.
 #[test]
 fn test_cancel_with_both_deposits_requires_auth() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -1871,7 +1877,7 @@ fn test_cancel_with_both_deposits_requires_auth() {
 // Issue #100: Test that submit_result on a cancelled match returns InvalidState (no deposit)
 #[test]
 fn test_submit_result_on_cancelled_match_no_deposit_fails() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -1898,7 +1904,7 @@ fn test_submit_result_on_cancelled_match_no_deposit_fails() {
 // Issue #225: MatchCount overflow returns Error::Overflow instead of wrapping
 #[test]
 fn test_match_count_overflow_returns_error() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Seed the counter at u64::MAX so the next increment would overflow
@@ -1924,7 +1930,7 @@ fn test_match_count_overflow_returns_error() {
 // Issue #209 / Closes #36: Player2 win payout sends full pot to player2
 #[test]
 fn test_player2_win_payout_full_pot() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -1967,7 +1973,7 @@ fn test_player2_win_payout_full_pot() {
 // player2 balance must remain unchanged and escrow must return to 0.
 #[test]
 fn test_cancel_match_refunds_only_player1_when_only_player1_deposited() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -2021,7 +2027,7 @@ fn test_cancel_match_refunds_only_player1_when_only_player1_deposited() {
 
 #[test]
 fn test_reentrancy_deposit_checks_effects_interactions() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -2052,7 +2058,7 @@ fn test_reentrancy_deposit_checks_effects_interactions() {
 
 #[test]
 fn test_reentrancy_submit_result_checks_effects_interactions() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -2107,7 +2113,8 @@ fn test_deposit_insufficient_allowance() {
 
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.initialize(&oracle, &admin, &token_addr);
+    let safe_address = Address::generate(&env);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address);
 
     let id = client.create_match(
         &player1,
@@ -2128,7 +2135,7 @@ fn test_deposit_insufficient_allowance() {
 // Issue: deposit succeeds when allowance is exactly the stake amount
 #[test]
 fn test_deposit_succeeds_with_exact_allowance() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -2151,11 +2158,13 @@ fn test_deposit_succeeds_with_exact_allowance() {
     assert_eq!(client.get_escrow_balance(&id), 100);
 }
 
-// Issue #912: emergency_drain — success, unpaused guard, non-admin guard
+// Issue #1102: emergency_drain — success, unpaused guard, non-admin guard
+// The `to` parameter has been removed from emergency_drain; the destination is
+// always the `safe_address` registered at initialize time.
 
 #[test]
 fn test_emergency_drain_succeeds_when_paused() {
-    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, admin, safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -2176,14 +2185,14 @@ fn test_emergency_drain_succeeds_when_paused() {
 
     client.pause();
 
-    let safe = Address::generate(&env);
-    client.emergency_drain(&safe, &admin);
+    // emergency_drain no longer accepts a destination — it always drains to safe_address
+    client.emergency_drain(&admin);
 
     // Capture events BEFORE any further contract calls that might clear them
     let events = env.events().all();
 
     assert_eq!(token_client.balance(&contract_id), 0);
-    assert_eq!(token_client.balance(&safe), total_expected);
+    assert_eq!(token_client.balance(&safe_address), total_expected);
 
     // Verify drain event
     let drain_event = events.iter().find(|(_, t, _)| {
@@ -2202,24 +2211,22 @@ fn test_emergency_drain_succeeds_when_paused() {
 
 #[test]
 fn test_emergency_drain_fails_when_not_paused() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
-    let safe = Address::generate(&env);
     assert_eq!(
-        client.try_emergency_drain(&safe, &admin),
+        client.try_emergency_drain(&admin),
         Err(Ok(Error::NotPaused))
     );
 }
 
 #[test]
 fn test_emergency_drain_fails_for_non_admin() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     client.pause();
     let non_admin = Address::generate(&env);
-    let safe = Address::generate(&env);
     assert_eq!(
-        client.try_emergency_drain(&safe, &non_admin),
+        client.try_emergency_drain(&non_admin),
         Err(Ok(Error::Unauthorized))
     );
 }
@@ -2228,7 +2235,7 @@ fn test_emergency_drain_fails_for_non_admin() {
 fn test_create_match_valid_platforms_accepted() {
     // Both known Platform variants must be accepted by create_match.
     // This test verifies the platform validation guard does not reject valid values.
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id1 = client.create_match(
@@ -2247,7 +2254,7 @@ fn test_create_match_valid_platforms_accepted() {
 // Issue #794: get_oracle returns the address passed to initialize
 #[test]
 fn test_get_oracle_returns_initialized_address() {
-    let (env, contract_id, oracle, _player1, _player2, _token, _admin) = setup();
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     assert_eq!(client.get_oracle(), oracle);
 }
@@ -2255,7 +2262,7 @@ fn test_get_oracle_returns_initialized_address() {
 // Issue #792: stake amount above MAX_STAKE is rejected
 #[test]
 fn test_create_match_stake_too_high_fails() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     assert_eq!(
         client.try_create_match(
@@ -2273,7 +2280,7 @@ fn test_create_match_stake_too_high_fails() {
 // Issue #791: stake amount below MIN_STAKE (e.g. zero) is rejected as StakeTooLow
 #[test]
 fn test_create_match_stake_below_min_fails() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     assert_eq!(
         client.try_create_match(
@@ -2299,7 +2306,8 @@ fn test_instance_ttl_extended_on_initialize() {
     let token_addr = token_id.address();
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.initialize(&oracle, &admin, &token_addr);
+    let safe_address = Address::generate(&env);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address);
 
     let instance_ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
     assert!(instance_ttl >= crate::INSTANCE_LIFETIME_THRESHOLD);
@@ -2351,7 +2359,8 @@ mod proptest_state_machine {
 
         let contract_id = env.register(EscrowContract, ());
         let client = EscrowContractClient::new(&env, &contract_id);
-        client.initialize(&oracle, &admin, &token_addr);
+        let safe_address = Address::generate(&env);
+        client.initialize(&oracle, &admin, &token_addr, &safe_address);
 
         let expiration = env.ledger().sequence() + 1_000_000;
         let token_client = TokenClient::new(&env, &token_addr);

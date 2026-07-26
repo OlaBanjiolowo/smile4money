@@ -6,7 +6,7 @@
 |-------|------|----------------|
 | **Player 1 / Player 2** | Create matches, deposit stakes, cancel matches | Authenticated by Stellar keypair. Trusted for own key management. Not trusted to act honestly toward each other. |
 | **Oracle** | Submits verified game results from Lichess/Chess.com | Authenticated by oracle keypair. Trusted for accurate result reporting. Not trusted with custody of funds. |
-| **Admin** | Pause/unpause contract, rotate oracle address | Authenticated by admin keypair. Trusted for emergency operations. Not trusted to access escrowed funds. |
+| **Admin** | Pause/unpause contract, rotate oracle address, trigger emergency drain | Authenticated by admin keypair. Trusted for emergency operations. Cannot redirect escrowed funds to an arbitrary address — `emergency_drain` always transfers to the `safe_address` fixed at initialization time. |
 | **Lichess / Chess.com API** | External source of truth for game outcomes | Outside the Soroban runtime boundary. Trusted to return correct results (within the oracle's verification logic). |
 | **Stellar / Soroban runtime** | Executes contract code, enforces authorization | Fully trusted for correct execution, state isolation, and ledger security. |
 
@@ -45,6 +45,7 @@
 | Oracle submits duplicate result to double-payout | `submit_result` | **High** | State machine rejects `submit_result` when `state != Active`; `Completed` is terminal |
 | Attacker creates multiple matches with same game_id | `create_match` | Medium | `DataKey::GameId` tracked; duplicate game_id returns `DuplicateGameId` error |
 | Admin drains funds without pause precondition | `emergency_drain` | Medium | `NotPaused` error if contract is not paused; event emitted for transparency |
+| Admin (or compromised admin key) drains funds to an arbitrary address (rug-pull) | `emergency_drain` | **High** | **Mitigated (issue #1102).** The `to` parameter has been removed. `emergency_drain` now always transfers to the `safe_address` registered immutably at `initialize` time. A compromised or malicious admin cannot redirect the drain to an attacker-controlled address. |
 
 ### Repudiation
 
@@ -85,10 +86,10 @@
 |-------|-------------|-----------------|
 | Stellar network | Correct execution of Soroban contracts | — |
 | Oracle service | Accurate game result reporting | Custody of player funds |
-| Admin key | Pause/unpause, oracle rotation | Accessing escrowed funds |
+| Admin key | Pause/unpause, oracle rotation, emergency drain to pre-registered safe address | Redirecting escrowed funds to an arbitrary address (structurally prevented — `emergency_drain` destination is fixed at init time) |
 | Players | Their own key management | Each other |
 
-No single party can unilaterally steal funds. The escrow contract enforces all payout rules on-chain.
+No single party can unilaterally redirect escrowed funds to an arbitrary address. `emergency_drain` is constrained to a pre-registered `safe_address` fixed at deployment. All other payout rules are enforced on-chain by the state machine.
 
 ---
 
@@ -117,6 +118,7 @@ No single party can unilaterally steal funds. The escrow contract enforces all p
 | | 1. **Multi-sig**: The admin address SHOULD be a multi-sig contract (e.g., Stellar clawback or Soroban multi-sig) requiring M-of-N signatures. |
 | | 2. **Backup keys**: At minimum, a backup admin key should be held by a separate trusted party. |
 | | 3. **Timelock**: A future enhancement should add a timelock between `pause()` and `emergency_drain()`, giving players time to react. |
+| | 4. **Safe address binding**: Even if the admin key is compromised (rather than lost), `emergency_drain` can only transfer to the `safe_address` fixed at `initialize` time — the attacker cannot redirect funds to an arbitrary address. |
 | **Recovery** | | |
 | | 1. If the contract has been initialized with a multi-sig admin, the admin role can be recovered through the multi-sig's governance process. |
 | | 2. **No on-chain recovery exists for a single-key admin**. The contract would need to be re-deployed and all active matches migrated off-chain. |
@@ -146,6 +148,27 @@ No single party can unilaterally steal funds. The escrow contract enforces all p
 ---
 
 ## Threat Model & Mitigations (per-function)
+
+### emergency_drain Rug-Pull (issue #1102)
+
+**Threat**: The original `emergency_drain(to: Address, caller: Address)` accepted an arbitrary destination address. A compromised or malicious admin could pause the contract and call `emergency_drain` with an attacker-controlled address as `to`, transferring the entire token balance — including all live player stakes — to that address. This is a classic rug-pull vector: a single compromised key grants unconditional custody over all escrowed funds.
+
+**Risk rating**: **Critical**. The admin key is the sole gating condition. There is no time-lock, no second signer requirement, and no on-chain recourse once the transfer executes.
+
+**Mitigation (applied — issue #1102)**:
+
+The `to` parameter has been removed from `emergency_drain`. A `safe_address: Address` parameter is now required in `initialize()` and stored immutably under `DataKey::SafeAddress`. `emergency_drain` reads that stored address and always drains to it — the call site cannot supply a different destination.
+
+```
+initialize(oracle, admin, token, safe_address)  ← safe_address set once, never changed
+emergency_drain(caller)                         ← destination is always DataKey::SafeAddress
+```
+
+**Residual risk**: The admin can still trigger a drain to `safe_address` at will (subject to the `is_paused` guard). If `safe_address` was set to an attacker-controlled address at deployment time, the protection is void. Operators MUST verify `safe_address` in the deployment transaction before any player funds are deposited. A future enhancement should add a timelock between `pause()` and `emergency_drain()` so players have a window to react.
+
+**What this does not protect against**:
+- A malicious deployer who sets `safe_address` to their own address at initialization time. Deployment-time parameters must be audited.
+- Admin key compromise used to pause the contract indefinitely (freezing player funds). This is mitigated separately by advising multi-sig admin keys.
 
 ### Re-initialization Attack
 
@@ -269,7 +292,7 @@ The concrete mitigations that apply regardless are:
 | `cancel_match` | `player1` or `player2` (requires auth) |
 | `submit_result` | Registered oracle address only |
 | `pause` / `unpause` | Admin only |
-| `emergency_drain` | Admin only (contract must be paused) |
+| `emergency_drain` | Admin only (contract must be paused; funds always sent to pre-registered `safe_address`) |
 | `update_oracle` | Admin only |
 | `get_match` / `is_funded` / `get_escrow_balance` | Anyone (read-only) |
 
@@ -314,16 +337,18 @@ No re-entrancy vectors exist in this codebase. The Soroban execution model provi
 ## Future Security Enhancements
 
 - **Multi-sig oracle**: Require M-of-N oracle signatures to submit a result, preventing single-key compromise from authorizing fraudulent payouts.
-- **Timelocked emergency drain**: Add a delay between `pause()` and `emergency_drain()` so players can monitor and react.
+- **Timelocked emergency drain**: Add a delay between `pause()` and `emergency_drain()` so players can monitor and react before funds are moved. (The destination is already fixed to `safe_address` — this enhancement would add a reaction window on top of that.)
 - **Result dispute window**: Allow players to challenge a result within a defined window by providing cryptographic proof.
 - **Admin social recovery**: N-of-M guardian accounts could restore admin access in case of key loss.
 - **Auto-cancel timeout**: Automatically cancel matches that remain in `Active` beyond a reasonable ledger count.
+- ~~**Restrict emergency_drain destination to a safe address**~~: **Done (issue #1102).** `emergency_drain` no longer accepts a `to` parameter. The destination is fixed at `initialize` time via `safe_address`.
 
 ## Threat Model Review Log
 
 | Date | Reviewer | Sign-off |
 |------|----------|----------|
 | 2026-06-24 | Internal review | ✅ Approved — STRIDE analysis complete, all identified threats have documented mitigations or accepted risk. |
+| 2026-07-25 | Issue #1102 remediation | ✅ `emergency_drain` rug-pull vector resolved. Removed arbitrary `to` parameter; drain destination now fixed to `safe_address` at `initialize` time. STRIDE Tampering table, per-function analysis, Trust Assumptions, and Access Control Summary updated to reflect the change. |
 
 ## Secrets Management
 
