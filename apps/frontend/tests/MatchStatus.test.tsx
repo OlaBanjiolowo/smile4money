@@ -27,7 +27,8 @@ vi.mock('@stellar/stellar-sdk', () => ({
 describe('MatchStatus — loading state', () => {
   it('shows loading state while fetching match', () => {
     render(<MatchStatus matchId="123" />);
-    expect(screen.getByTestId('match-status')).toBeInTheDocument();
+    // The loading skeleton uses data-testid="match-status-skeleton"
+    expect(screen.getByTestId('match-status-skeleton')).toBeInTheDocument();
   });
 });
 
@@ -365,5 +366,147 @@ describe('MatchStatus — Cancelled state (refund display)', () => {
     // with the generic "cancelled" message
     expect(screen.getByTestId('cancel-reason-player')).toBeInTheDocument();
     expect(screen.getByTestId('cancel-reason-player').textContent).toMatch(/cancelled/i);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Issue #1069 — PendingResult dispute-window countdown
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Covers:
+//   1. Countdown renders when pendingResultLedger + currentLedger are provided
+//   2. Shows ~18 hours remaining text for a freshly-submitted result
+//   3. Shows "available now" when the dispute window has already elapsed
+//   4. No countdown element when ledger data is absent (graceful degradation)
+
+describe('MatchStatus — PendingResult countdown', () => {
+  it('renders pending-result state without countdown when ledger data is absent', async () => {
+    const onFetchMatch = vi.fn().mockResolvedValue({
+      id: '100',
+      state: 'PendingResult',
+      player1: 'GPLAYER1ABC',
+      player2: 'GPLAYER2XYZ',
+      stakeAmount: '500',
+      token: 'xlm',
+      platform: 'lichess',
+      gameId: 'pending-game-1',
+      winner: 'Player1',
+      // No pendingResultLedger / currentLedger — graceful degradation
+    });
+
+    render(<MatchStatus matchId="100" onFetchMatch={onFetchMatch} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('state-pending-result')).toBeInTheDocument();
+    });
+
+    // Without ledger data there is nothing to count down from
+    expect(screen.queryByTestId('dispute-countdown')).not.toBeInTheDocument();
+  });
+
+  it('renders the countdown with ~18 h remaining for a freshly submitted result', async () => {
+    // DISPUTE_WINDOW_LEDGERS = 17_280. Submit at ledger 1000, current = 1000
+    // => 17_280 ledgers × 5 s = 86 400 s remaining (~24 h, but we assert the
+    //    element exists and contains a time value)
+    const onFetchMatch = vi.fn().mockResolvedValue({
+      id: '101',
+      state: 'PendingResult',
+      player1: 'GPLAYER1ABC',
+      player2: 'GPLAYER2XYZ',
+      stakeAmount: '500',
+      token: 'xlm',
+      platform: 'lichess',
+      gameId: 'pending-game-2',
+      winner: 'Player2',
+      pendingResultLedger: 1000,
+      currentLedger: 1000, // submitted this ledger — full window remaining
+    });
+
+    render(<MatchStatus matchId="101" onFetchMatch={onFetchMatch} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('state-pending-result')).toBeInTheDocument();
+    });
+
+    const countdown = screen.getByTestId('dispute-countdown');
+    expect(countdown).toBeInTheDocument();
+    // Should mention hours since 17 280 × 5 s = 86 400 s = 24 h
+    expect(screen.getByTestId('dispute-countdown-value').textContent).toMatch(/h/);
+    expect(countdown.textContent).toMatch(/Payout available in/i);
+  });
+
+  it('shows half-elapsed countdown when current ledger is mid-window', async () => {
+    // Submit at 1000, current = 9640 (halfway through 17 280) => ~12 h left
+    const onFetchMatch = vi.fn().mockResolvedValue({
+      id: '102',
+      state: 'PendingResult',
+      player1: 'GPLAYER1ABC',
+      player2: 'GPLAYER2XYZ',
+      stakeAmount: '100',
+      token: 'xlm',
+      platform: 'lichess',
+      gameId: 'pending-game-3',
+      pendingResultLedger: 1000,
+      currentLedger: 9640, // 1000 + 8640 ledgers in = halfway
+    });
+
+    render(<MatchStatus matchId="102" onFetchMatch={onFetchMatch} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('dispute-countdown')).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('dispute-countdown-value').textContent).toMatch(/h/);
+  });
+
+  it('shows "available now" when the dispute window has fully elapsed', async () => {
+    // Submit at 1000, current = 1000 + 17 280 + 1 = 18 281 — window is past
+    const onFetchMatch = vi.fn().mockResolvedValue({
+      id: '103',
+      state: 'PendingResult',
+      player1: 'GPLAYER1ABC',
+      player2: 'GPLAYER2XYZ',
+      stakeAmount: '100',
+      token: 'xlm',
+      platform: 'lichess',
+      gameId: 'pending-game-4',
+      pendingResultLedger: 1000,
+      currentLedger: 18_281, // 1 ledger past the window close
+    });
+
+    render(<MatchStatus matchId="103" onFetchMatch={onFetchMatch} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('dispute-countdown')).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('dispute-countdown').textContent).toMatch(/Payout available/i);
+    // No countdown value element when available now
+    expect(screen.queryByTestId('dispute-countdown-value')).not.toBeInTheDocument();
+  });
+
+  it('also shows winner info alongside the countdown', async () => {
+    const onFetchMatch = vi.fn().mockResolvedValue({
+      id: '104',
+      state: 'PendingResult',
+      player1: 'GPLAYER1ABC',
+      player2: 'GPLAYER2XYZ',
+      stakeAmount: '200',
+      token: 'usdc',
+      platform: 'chesscom',
+      gameId: 'pending-game-5',
+      winner: 'Draw',
+      pendingResultLedger: 5000,
+      currentLedger: 5000,
+    });
+
+    render(<MatchStatus matchId="104" onFetchMatch={onFetchMatch} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('state-pending-result')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/Draw/)).toBeInTheDocument();
+    expect(screen.getByTestId('dispute-countdown')).toBeInTheDocument();
   });
 });

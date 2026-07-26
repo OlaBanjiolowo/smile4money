@@ -597,17 +597,16 @@ exports[`CreateMatch — snapshots > matches snapshot: Chess.com platform select
         <label
           for="stake-amount"
         >
-          Stake Amount (
-          XLM
-          )
+          Stake Amount (stroops)
         </label>
         <input
           aria-invalid="false"
           data-testid="stake-amount-input"
           id="stake-amount"
-          min="0"
-          placeholder="0.00"
-          step="any"
+          max="10000000000000"
+          min="1"
+          placeholder="e.g. 10000000 (= 1 XLM)"
+          step="1"
           type="number"
           value=""
         />
@@ -738,17 +737,16 @@ exports[`CreateMatch — snapshots > matches snapshot: USDC token selected 1`] =
         <label
           for="stake-amount"
         >
-          Stake Amount (
-          XLM
-          )
+          Stake Amount (stroops)
         </label>
         <input
           aria-invalid="false"
           data-testid="stake-amount-input"
           id="stake-amount"
-          min="0"
-          placeholder="0.00"
-          step="any"
+          max="10000000000000"
+          min="1"
+          placeholder="e.g. 10000000 (= 1 XLM)"
+          step="1"
           type="number"
           value=""
         />
@@ -879,17 +877,16 @@ exports[`CreateMatch — snapshots > matches snapshot: default state (XLM / Lich
         <label
           for="stake-amount"
         >
-          Stake Amount (
-          XLM
-          )
+          Stake Amount (stroops)
         </label>
         <input
           aria-invalid="false"
           data-testid="stake-amount-input"
           id="stake-amount"
-          min="0"
-          placeholder="0.00"
-          step="any"
+          max="10000000000000"
+          min="1"
+          placeholder="e.g. 10000000 (= 1 XLM)"
+          step="1"
           type="number"
           value=""
         />
@@ -1031,8 +1028,15 @@ exports[`MatchStatus — snapshots > matches snapshot: cancelled state 1`] = `
       </h3>
       <p
         class="state-description"
+        data-testid="cancel-reason-player"
       >
-        This match has been cancelled. Any deposited stakes have been refunded.
+        This match has been cancelled.
+      </p>
+      <p
+        class="no-refund"
+        data-testid="no-refund-info"
+      >
+        No stakes were deposited; no refunds were necessary.
       </p>
     </div>
   </div>
@@ -1081,17 +1085,30 @@ exports[`MatchStatus — snapshots > matches snapshot: completed state with winn
 exports[`MatchStatus — snapshots > matches snapshot: loading state (match ID provided, no fetch override) 1`] = `
 <div>
   <div
-    class="match-status"
-    data-testid="match-status"
+    aria-busy="true"
+    aria-label="Loading match status"
+    class="match-status animate-pulse"
+    data-testid="match-status-skeleton"
   >
     <div
-      class="spinner"
+      class="mb-3 h-6 w-32 rounded bg-slate-200 dark:bg-slate-700"
     />
-    <p
-      class="loading-message"
+    <div
+      class="mb-4 h-4 w-48 rounded bg-slate-200 dark:bg-slate-700"
+    />
+    <div
+      class="space-y-2 rounded-lg border border-slate-200 p-4 dark:border-slate-700"
     >
-      Loading match status…
-    </p>
+      <div
+        class="h-5 w-24 rounded bg-slate-200 dark:bg-slate-700"
+      />
+      <div
+        class="h-4 w-full rounded bg-slate-200 dark:bg-slate-700"
+      />
+      <div
+        class="h-4 w-3/4 rounded bg-slate-200 dark:bg-slate-700"
+      />
+    </div>
   </div>
 </div>
 `;
