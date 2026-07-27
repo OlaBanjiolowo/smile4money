@@ -211,6 +211,68 @@ fn test_get_match_invalid_match_id_beyond_count() {
 }
 
 #[test]
+fn test_get_platform_invalid_match_id_u64_max() {
+    let (env, contract_id, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    assert!(matches!(
+        client.try_get_platform(&u64::MAX),
+        Err(Ok(Error::MatchNotFound))
+    ));
+}
+
+#[test]
+fn test_get_platform_invalid_match_id_beyond_count() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "get_platform_beyond"),
+        &Platform::Lichess,
+    );
+    assert!(matches!(
+        client.try_get_platform(&1),
+        Err(Ok(Error::MatchNotFound))
+    ));
+}
+
+#[test]
+fn test_get_platform_lichess() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "lichess-platform"),
+        &Platform::Lichess,
+    );
+
+    assert_eq!(client.get_platform(&id), Platform::Lichess);
+}
+
+#[test]
+fn test_get_platform_chessdotcom() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "chessdotcom-platform"),
+        &Platform::ChessDotCom,
+    );
+
+    assert_eq!(client.get_platform(&id), Platform::ChessDotCom);
+}
+
+#[test]
 fn test_deposit_and_activate() {
     let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);

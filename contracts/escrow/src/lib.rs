@@ -929,6 +929,17 @@ impl EscrowContract {
             .ok_or(Error::MatchNotFound)
     }
 
+    /// Read the platform of a match by ID.
+    pub fn get_platform(env: Env, match_id: u64) -> Result<Platform, Error> {
+        Self::validate_match_id(&env, match_id)?;
+        let m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+        Ok(m.platform)
+    }
+
     /// Check whether both players have deposited.
     pub fn is_funded(env: Env, match_id: u64) -> Result<bool, Error> {
         let m: Match = env
