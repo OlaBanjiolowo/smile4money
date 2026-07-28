@@ -401,6 +401,105 @@ let balance = escrow.get_escrow_balance(&match_id);
 
 ---
 
+#### `list_matches`
+
+Retrieve a paginated list of match IDs.
+
+**Signature:**
+```rust
+pub fn list_matches(env: Env, start: u64, limit: u32) -> Vec<u64>
+```
+
+**Parameters:**
+- `start`: Match ID to start from (inclusive)
+- `limit`: Maximum number of match IDs to return (capped at 100)
+
+**Returns:**
+- `Vec<u64>`: Vector of match IDs from `start` up to the next 100 entries (or fewer)
+
+**Behavior:**
+- Returns match IDs in range `[start, start + limit)` where the limit is automatically capped at **100**
+- If `start >= total_match_count`, returns an empty vector (last page)
+- If fewer matches exist between `start` and `start + limit`, only returns available IDs
+- Empty return indicates the last page has been reached
+
+**Pagination Example:**
+```rust
+let mut start = 0;
+loop {
+    let matches = escrow.list_matches(&start, &100);
+    if matches.is_empty() {
+        break; // Reached the last page
+    }
+    
+    // Process matches...
+    for match_id in &matches {
+        let match_data = escrow.get_match(match_id);
+        println!("Match {}: {:?}", match_id, match_data.state);
+    }
+    
+    // Advance to next page
+    start = start + matches.len() as u64;
+}
+```
+
+**Notes:**
+- Requesting a `limit` greater than 100 does not error; it is silently capped at 100
+- To detect the last page: if the returned vector has fewer entries than requested, you have reached the end
+- All match IDs are returned sequentially (0, 1, 2, ...) regardless of state
+
+---
+
+#### `list_results`
+
+Retrieve a paginated list of oracle results.
+
+**Signature:**
+```rust
+pub fn list_results(env: Env, start: u64, limit: u32) -> Vec<(u64, ResultEntry)>
+```
+
+**Parameters:**
+- `start`: Match ID to start searching from (inclusive)
+- `limit`: Maximum number of results to return (capped at 100)
+
+**Returns:**
+- `Vec<(u64, ResultEntry)>`: Vector of tuples containing `(match_id, result_entry)` for matches with submitted results
+
+**Behavior:**
+- Scans match IDs starting from `start` up to `start + limit` (capped at 100 iterations)
+- Only returns entries where a result has been submitted via `submit_result`
+- If no results exist in the scanned range, returns an empty vector
+- Unlike `list_matches`, the returned vector may be **shorter than the limit** because skipped IDs (those without results) are not included
+
+**Pagination Example:**
+```rust
+let mut start = 0;
+let mut all_results = Vec::new();
+loop {
+    let results = oracle.list_results(&start, &100);
+    if results.is_empty() {
+        break; // No results found in this range, stop scanning
+    }
+    
+    // Process results...
+    for (match_id, entry) in &results {
+        println!("Match {}: {} -> {:?}", match_id, entry.game_id, entry.result);
+    }
+    
+    // Advance scan position by 100 (not by results.len(), since results can be sparse)
+    start = start + 100;
+}
+```
+
+**Important Differences from list_matches:**
+- `list_results` scans up to 100 match IDs but returns only those with submitted results
+- A page may return fewer entries than the cap (empty matches are skipped)
+- To iterate through all results without gaps, always advance `start` by 100, not by `results.len()`
+- Requesting a `limit` greater than 100 does not error; it is silently capped at 100
+
+---
+
 ## Oracle Contract
 
 ### Initialization
@@ -984,6 +1083,88 @@ stellar contract invoke \
   -- get_escrow_balance \
   --match_id 0
 # Returns: i128 (0, stake_amount, or 2 * stake_amount)
+```
+
+#### list_matches
+
+```bash
+stellar contract invoke \
+  --id "$CONTRACT_ESCROW" \
+  --source any-key \
+  --network "$NETWORK" \
+  -- list_matches \
+  --start 0 \
+  --limit 100
+# Returns: Vec<u64> of match IDs [0, 1, 2, ...]
+```
+
+Example with pagination loop (in bash):
+
+```bash
+# Fetch all matches in pages
+start=0
+while true; do
+  matches=$(stellar contract invoke \
+    --id "$CONTRACT_ESCROW" \
+    --source any-key \
+    --network "$NETWORK" \
+    -- list_matches \
+    --start $start \
+    --limit 100)
+  
+  # Check if empty (reached last page)
+  if [ -z "$matches" ] || [ "$matches" = "[]" ]; then
+    break
+  fi
+  
+  # Process matches...
+  echo "Matches from $start: $matches"
+  
+  # Advance by the number of results
+  count=$(echo "$matches" | jq 'length')
+  start=$((start + count))
+done
+```
+
+#### list_results
+
+```bash
+stellar contract invoke \
+  --id "$CONTRACT_ORACLE" \
+  --source any-key \
+  --network "$NETWORK" \
+  -- list_results \
+  --start 0 \
+  --limit 100
+# Returns: Vec<(u64, ResultEntry)> of (match_id, result_entry) pairs
+```
+
+Example with pagination loop (in bash):
+
+```bash
+# Fetch all results in pages
+start=0
+while true; do
+  results=$(stellar contract invoke \
+    --id "$CONTRACT_ORACLE" \
+    --source any-key \
+    --network "$NETWORK" \
+    -- list_results \
+    --start $start \
+    --limit 100)
+  
+  # Check if empty (no results in this range)
+  if [ -z "$results" ] || [ "$results" = "[]" ]; then
+    break
+  fi
+  
+  # Process results...
+  echo "Results from match $start: $results"
+  
+  # Always advance by 100, not by results.len()
+  # (results can be sparse if some matches don't have results yet)
+  start=$((start + 100))
+done
 ```
 
 ---
