@@ -713,6 +713,107 @@ fn test_submit_result_on_completed_match_fails() {
     );
 }
 
+/// Queue deduplication test: Simulate the scenario where an off-chain oracle
+/// service buggy queue might enqueue the same match_id twice, then process both
+/// items. This test verifies that the second submission is rejected with
+/// `InvalidState`, preventing double-payout.
+///
+/// **Scenario**:
+/// 1. Match created and both players deposit → state = Active
+/// 2. First submit_result call succeeds → state transitions to PendingResult
+/// 3. Second submit_result call (same match_id, potentially different winner)
+///    is rejected with InvalidState
+/// 4. Balances remain unchanged after the rejection
+///
+/// **Why this matters**:
+/// - The escrow contract relies on the state machine to prevent duplicate submissions.
+/// - This test documents that deduplication is implicit in the state transition logic:
+///   Active → PendingResult (only valid state for submit_result).
+/// - Mirrors the oracle contract's explicit AlreadySubmitted deduplication.
+#[test]
+fn test_submit_result_queue_deduplication_prevents_duplicate_match_id() {
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "queue_dedup_test"),
+        &Platform::Lichess,
+    );
+
+    // Both players deposit → match is now Active
+    client.deposit(&match_id, &player1);
+    client.deposit(&match_id, &player2);
+    assert_eq!(client.get_match(&match_id).state, MatchState::Active);
+
+    // Snapshot balances
+    let p1_before = token_client.balance(&player1);
+    let p2_before = token_client.balance(&player2);
+    let escrow_before = client.get_escrow_balance(&match_id);
+
+    // ── First submission (simulates first item dequeued from queue) ──────────
+    let game_id = String::from_str(&env, "queue_dedup_test");
+    client.submit_result(&match_id, &game_id, &Winner::Player1, &oracle);
+
+    // State transitions to PendingResult; payout executes
+    assert_eq!(client.get_match(&match_id).state, MatchState::PendingResult);
+
+    // Balances after first submission
+    let p1_after_first = token_client.balance(&player1);
+    let p2_after_first = token_client.balance(&player2);
+
+    // ── Second submission (simulates duplicate item from queue) ───────────────
+    // Oracle tries to submit a result for the same match_id again
+    // (this could be a different winner due to queue bug or race condition)
+    let result = client.try_submit_result(&match_id, &game_id, &Winner::Player2, &oracle);
+
+    // Second submission must be rejected with InvalidState
+    assert_eq!(
+        result,
+        Err(Ok(Error::InvalidState)),
+        "second submit_result on same match_id must return InvalidState"
+    );
+
+    // Verify match state remains PendingResult (not Completed)
+    assert_eq!(
+        client.get_match(&match_id).state,
+        MatchState::PendingResult,
+        "match state must remain PendingResult after rejected second submission"
+    );
+
+    // Verify balances are unchanged by the rejected second submission
+    assert_eq!(
+        token_client.balance(&player1),
+        p1_after_first,
+        "Player 1 balance must not change after rejected duplicate submission"
+    );
+    assert_eq!(
+        token_client.balance(&player2),
+        p2_after_first,
+        "Player 2 balance must not change after rejected duplicate submission"
+    );
+
+    // Verify escrow was reduced by the first payout
+    let escrow_after = client.get_escrow_balance(&match_id);
+    assert!(
+        escrow_after < escrow_before,
+        "escrow balance should decrease after first successful payout"
+    );
+
+    // ── Summary of deduplication protection ─────────────────────────────────
+    // The escrow contract prevents queue-based duplicate submissions via its
+    // state machine:
+    //   - Active state only allows submit_result → PendingResult transition
+    //   - Once PendingResult, any further submit_result call fails with InvalidState
+    //   - This provides implicit deduplication without a separate tracking index
+    //
+    // Compare to the oracle contract which uses explicit AlreadySubmitted checks.
+}
+
 #[test]
 fn test_submit_result_wrong_game_id_fails() {
     let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
