@@ -57,7 +57,7 @@ mod errors;
 mod types;
 
 use errors::Error;
-use soroban_sdk::{contract, contractimpl, symbol_short, token, vec, Address, Env, String, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, symbol_short, token, vec, Address, Env, String, Symbol, TryFromVal, Vec};
 use types::{DataKey, Match, MatchState, OptionalWinner, Platform, Winner};
 
 /// ~30 days at 5s/ledger. Used as both the TTL threshold and the extend-to value.
@@ -117,6 +117,18 @@ const TIMEOUT_LEDGERS: u32 = 120_960;
 ///
 /// `15 000 000 stroops = 1.5 XLM` (1 XLM minimum base reserve + 0.5 XLM slack).
 const ESCROW_RESERVE_BUFFER_STROOPS: i128 = 15_000_000;
+
+fn is_zero_address(env: &Env, addr: &Address) -> bool {
+    let zero_address: Address = TryFromVal::try_from_val(
+        &env,
+        &String::from_str(
+            &env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        ),
+    )
+    .expect("invalid zero address constant");
+    addr == &zero_address
+}
 
 #[contract]
 pub struct EscrowContract;
@@ -243,13 +255,7 @@ impl EscrowContract {
         }
         caller.require_auth();
 
-        if new_admin.to_string()
-            == String::from_str(
-                &env,
-                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-            )
-            || new_admin == current_admin
-        {
+        if is_zero_address(&env, &new_admin) || new_admin == current_admin {
             return Err(Error::InvalidAdmin);
         }
 
