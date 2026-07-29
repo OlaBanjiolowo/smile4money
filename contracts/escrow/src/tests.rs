@@ -867,8 +867,136 @@ fn test_create_match_empty_game_id_fails() {
     );
 }
 
+// ── #1029: game_id character-set validation ──────────────────────────────────
+
 #[test]
-fn test_create_match_wrong_token_fails() {
+fn test_create_match_valid_game_id_alphanum() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    // Pure alphanumeric — should succeed
+    assert!(client
+        .try_create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &String::from_str(&env, "abc123XYZ"),
+            &Platform::Lichess,
+        )
+        .is_ok());
+}
+
+#[test]
+fn test_create_match_valid_game_id_with_hyphen_and_underscore() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    // Hyphens and underscores are permitted
+    assert!(client
+        .try_create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &String::from_str(&env, "game-001_ranked"),
+            &Platform::Lichess,
+        )
+        .is_ok());
+}
+
+#[test]
+fn test_create_match_game_id_with_null_byte_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    // Null byte — must be rejected
+    let game_id = String::from_bytes(&env, &[b'a', b'b', 0x00, b'c']);
+    assert_eq!(
+        client.try_create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &game_id,
+            &Platform::Lichess,
+        ),
+        Err(Ok(Error::InvalidGameId))
+    );
+}
+
+#[test]
+fn test_create_match_game_id_with_control_char_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    // Tab control character (0x09) — must be rejected
+    let game_id = String::from_bytes(&env, &[b'g', b'a', b'm', b'e', 0x09]);
+    assert_eq!(
+        client.try_create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &game_id,
+            &Platform::Lichess,
+        ),
+        Err(Ok(Error::InvalidGameId))
+    );
+}
+
+#[test]
+fn test_create_match_game_id_with_space_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    // Space (0x20) — must be rejected
+    assert_eq!(
+        client.try_create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &String::from_str(&env, "game id"),
+            &Platform::Lichess,
+        ),
+        Err(Ok(Error::InvalidGameId))
+    );
+}
+
+#[test]
+fn test_create_match_game_id_with_non_ascii_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    // High byte 0x80 — must be rejected
+    let game_id = String::from_bytes(&env, &[b'g', b'a', b'm', b'e', 0x80]);
+    assert_eq!(
+        client.try_create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &game_id,
+            &Platform::Lichess,
+        ),
+        Err(Ok(Error::InvalidGameId))
+    );
+}
+
+#[test]
+fn test_create_match_game_id_with_dot_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    // Dot (.) is not in the allowed set
+    assert_eq!(
+        client.try_create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &String::from_str(&env, "game.id"),
+            &Platform::Lichess,
+        ),
+        Err(Ok(Error::InvalidGameId))
+    );
+}
+
+
     let (env, contract_id, _oracle, player1, player2, _token, admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 

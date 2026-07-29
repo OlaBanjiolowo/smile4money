@@ -145,6 +145,29 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Validate that every byte of `game_id` belongs to the set `[A-Za-z0-9_-]`.
+    ///
+    /// This enforces printable ASCII and prevents null bytes, control characters,
+    /// whitespace, and non-ASCII sequences from entering persistent storage.
+    /// The allowed set mirrors the identifier format used by Lichess and Chess.com.
+    ///
+    /// The string is copied into a fixed 64-byte stack buffer — the same size as
+    /// `MAX_GAME_ID_LEN` — so no heap allocation is required inside the WASM guest.
+    fn is_valid_game_id(game_id: &soroban_sdk::String) -> bool {
+        let len = game_id.len() as usize;
+        // Safety: len is already validated to be in [1, MAX_GAME_ID_LEN].
+        let mut buf = [0u8; MAX_GAME_ID_LEN as usize];
+        game_id.copy_into_slice(&mut buf[..len]);
+        for i in 0..len {
+            let b = buf[i];
+            let ok = b.is_ascii_alphanumeric() || b == b'_' || b == b'-';
+            if !ok {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Pre-flight check that the contract retains at least
     /// [`ESCROW_RESERVE_BUFFER_STROOPS`] of `token` **after** a total payout of
     /// `payout_total` is subtracted.
@@ -319,6 +342,14 @@ impl EscrowContract {
         }
         let game_id_len = game_id.len();
         if game_id_len == 0 || game_id_len > MAX_GAME_ID_LEN {
+            return Err(Error::InvalidGameId);
+        }
+        // Enforce printable ASCII: only [A-Za-z0-9_-] are accepted.
+        // This closes the gap where a caller could submit a game_id containing
+        // null bytes, control characters, or non-ASCII sequences that would
+        // match the length check but silently diverge from the platform API
+        // lookup key used by the oracle.
+        if !Self::is_valid_game_id(&game_id) {
             return Err(Error::InvalidGameId);
         }
         if env
