@@ -1053,6 +1053,22 @@ fn test_update_oracle() {
 }
 
 #[test]
+fn test_transfer_admin_rejects_zero_address() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let zero_admin: Address = TryFromVal::try_from_val(
+        &env,
+        &String::from_str(
+            &env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(client.try_transfer_admin(&admin, &zero_admin), Err(Ok(Error::InvalidAdmin)));
+}
+
+#[test]
 fn test_pause_blocks_all_state_changing_operations() {
     let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
