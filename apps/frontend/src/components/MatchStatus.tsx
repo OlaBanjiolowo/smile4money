@@ -128,21 +128,37 @@ export function MatchStatus({
     }
   }, [matchId, onFetchMatch]);
 
+  // Track latest match state in a ref so the polling interval can read it
+  // without being recreated on every data update.
+  const matchDataRef = React.useRef<MatchData | null>(null);
+  useEffect(() => {
+    matchDataRef.current = matchData;
+  }, [matchData]);
+
   useEffect(() => {
     if (!matchId) return;
 
-    // Initial fetch - set loading status first
+    // Initial fetch on mount / matchId change
     setFetchStatus('loading');
     fetchMatch();
 
-    // Only poll if not in a terminal state
-    if (matchData && TERMINAL_STATES.includes(matchData.state)) {
-      return; // Don't poll for terminal states
-    }
+    // Poll every 10 seconds; stop automatically when a terminal state is reached.
+    // The interval is intentionally NOT re-created when matchData changes — we
+    // read the latest value through matchDataRef inside the callback instead.
+    const interval = setInterval(() => {
+      if (
+        matchDataRef.current &&
+        TERMINAL_STATES.includes(matchDataRef.current.state)
+      ) {
+        clearInterval(interval);
+        return;
+      }
+      fetchMatch();
+    }, 10_000);
 
-    const interval = setInterval(fetchMatch, 5000);
     return () => clearInterval(interval);
-  }, [matchId, fetchMatch, matchData]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matchId, fetchMatch]);
 
   // Tick every second while in PendingResult to keep the countdown live.
   // The ticker is intentionally separate from the polling interval so it can
