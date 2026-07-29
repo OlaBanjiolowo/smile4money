@@ -2368,6 +2368,13 @@ fn test_get_oracle_returns_initialized_address() {
     assert_eq!(client.get_oracle(), oracle);
 }
 
+#[test]
+fn test_get_admin_returns_initialized_address() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    assert_eq!(client.get_admin(), admin);
+}
+
 // Issue #792: stake amount above MAX_STAKE is rejected
 #[test]
 fn test_create_match_stake_too_high_fails() {

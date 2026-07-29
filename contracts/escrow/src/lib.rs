@@ -926,6 +926,22 @@ impl EscrowContract {
             .get(&DataKey::GameId(game_id))
     }
 
+    /// Read the current oracle address configured for the contract.
+    pub fn get_oracle(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)
+    }
+
+    /// Read the current admin address configured for the contract.
+    pub fn get_admin(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)
+    }
+
     /// Read a match by ID.
     pub fn get_match(env: Env, match_id: u64) -> Result<Match, Error> {
         Self::validate_match_id(&env, match_id)?;
