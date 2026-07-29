@@ -157,6 +157,12 @@ impl EscrowContract {
         Ok(())
     }
 
+    fn bump_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
     /// Pre-flight check that the contract retains at least
     /// [`ESCROW_RESERVE_BUFFER_STROOPS`] of `token` **after** a total payout of
     /// `payout_total` is subtracted.
@@ -209,9 +215,7 @@ impl EscrowContract {
             .set(&DataKey::SafeAddress, &safe_address);
         env.storage().instance().set(&DataKey::MatchCount, &0u64);
         env.storage().instance().set(&DataKey::Paused, &false);
-        env.storage()
-            .instance()
-            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -229,9 +233,7 @@ impl EscrowContract {
             .get(&DataKey::Oracle)
             .ok_or(Error::Unauthorized)?;
         env.storage().instance().set(&DataKey::Oracle, &new_oracle);
-        env.storage()
-            .instance()
-            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        Self::bump_instance_ttl(&env);
         env.events().publish(
             (
                 Symbol::new(&env, "admin"),
@@ -260,6 +262,7 @@ impl EscrowContract {
         }
 
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+        Self::bump_instance_ttl(&env);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("adm_xfer")),
             (current_admin, new_admin),
@@ -276,6 +279,7 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &true);
+        Self::bump_instance_ttl(&env);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("paused")),
             (admin, env.ledger().sequence()),
@@ -292,6 +296,7 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &false);
+        Self::bump_instance_ttl(&env);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("unpaused")),
             (admin, env.ledger().sequence()),
@@ -389,9 +394,7 @@ impl EscrowContract {
         );
         let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
         env.storage().instance().set(&DataKey::MatchCount, &next_id);
-        env.storage()
-            .instance()
-            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        Self::bump_instance_ttl(&env);
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("created")),
@@ -489,6 +492,7 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
+        Self::bump_instance_ttl(&env);
 
         Ok(())
     }
@@ -560,6 +564,7 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
+        Self::bump_instance_ttl(&env);
 
         env.events().publish(
             (Symbol::new(&env, "oracle"), symbol_short!("pending")),
@@ -627,6 +632,7 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
+        Self::bump_instance_ttl(&env);
 
         env.events().publish(
             (Symbol::new(&env, "oracle"), symbol_short!("overridn")),
@@ -706,6 +712,7 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
+        Self::bump_instance_ttl(&env);
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("completed")),
@@ -777,6 +784,7 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
+        Self::bump_instance_ttl(&env);
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("timeout")),
@@ -852,6 +860,7 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
+        Self::bump_instance_ttl(&env);
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("cancelled")),
@@ -910,6 +919,7 @@ impl EscrowContract {
         if balance > 0 {
             client.transfer(&contract, &safe_address, &balance);
         }
+        Self::bump_instance_ttl(&env);
 
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("drain")),

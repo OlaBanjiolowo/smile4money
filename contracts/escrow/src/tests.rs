@@ -1477,6 +1477,31 @@ fn test_deposit_event_player_label() {
 }
 
 #[test]
+fn test_deposit_extends_instance_ttl() {
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "ttl_deposit"),
+        &Platform::Lichess,
+    );
+
+    let initial_ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+    assert!(initial_ttl >= crate::INSTANCE_LIFETIME_THRESHOLD);
+
+    // Advance blocks to simulate time passing, then call deposit.
+    env.ledger().set_sequence_number(env.ledger().sequence() + 1);
+    client.deposit(&id, &player1);
+
+    let post_deposit_ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+    assert!(post_deposit_ttl >= initial_ttl);
+}
+
+#[test]
 fn test_submit_result_emits_event() {
     let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
