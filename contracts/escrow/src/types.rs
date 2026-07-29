@@ -246,9 +246,9 @@ pub struct Match {
     /// (i.e. when the match transitioned to `PendingResult`).
     ///
     /// Used by [`finalize_result`](crate::EscrowContract::finalize_result) to
-    /// check whether `DISPUTE_WINDOW_LEDGERS` have elapsed. `0` when no result
+    /// check whether `DISPUTE_WINDOW_LEDGERS` have elapsed. `None` when no result
     /// has been submitted yet.
-    pub pending_result_ledger: u32,
+    pub pending_result_ledger: Option<u32>,
 
     /// The winner reported by the oracle, held in limbo during the dispute window.
     ///

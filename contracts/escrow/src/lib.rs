@@ -260,6 +260,9 @@ impl EscrowContract {
         }
 
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("adm_xfer")),
             (current_admin, new_admin),
@@ -367,7 +370,7 @@ impl EscrowContract {
             player2_deposited: false,
             created_ledger: env.ledger().sequence(),
             activated_ledger: 0,
-            pending_result_ledger: 0,
+            pending_result_ledger: None,
             pending_winner: OptionalWinner::None,
             cancelled_ledger: None,
             completed_ledger: None,
@@ -549,7 +552,7 @@ impl EscrowContract {
         // STATE TRANSITION: Active → PendingResult
         // The oracle's result enters a dispute window. No payout yet.
         m.state = MatchState::PendingResult;
-        m.pending_result_ledger = env.ledger().sequence();
+        m.pending_result_ledger = Some(env.ledger().sequence());
         m.pending_winner = OptionalWinner::Some(winner.clone());
 
         env.storage()
@@ -612,7 +615,8 @@ impl EscrowContract {
         // Ensure the dispute window has not yet expired; after expiry the result
         // is final and must be processed via finalize_result.
         let current = env.ledger().sequence();
-        if current > m.pending_result_ledger + DISPUTE_WINDOW_LEDGERS {
+        let prl = m.pending_result_ledger.ok_or(Error::InvalidState)?;
+        if current > prl + DISPUTE_WINDOW_LEDGERS {
             return Err(Error::DisputeWindowActive);
         }
 
@@ -660,7 +664,8 @@ impl EscrowContract {
         }
 
         let current = env.ledger().sequence();
-        if current <= m.pending_result_ledger + DISPUTE_WINDOW_LEDGERS {
+        let prl = m.pending_result_ledger.ok_or(Error::InvalidState)?;
+        if current <= prl + DISPUTE_WINDOW_LEDGERS {
             return Err(Error::DisputeWindowActive);
         }
 
@@ -909,12 +914,18 @@ impl EscrowContract {
 
         if balance > 0 {
             client.transfer(&contract, &safe_address, &balance);
+            env.events().publish(
+                (Symbol::new(&env, "admin"), symbol_short!("drain")),
+                (balance, safe_address, admin),
+            );
+        } else {
+            // Preserve the audit trail even when there are no funds to drain.
+            // A silent success with no event would complicate post-mortems.
+            env.events().publish(
+                (Symbol::new(&env, "admin"), symbol_short!("drn_noop")),
+                (0i128, safe_address, admin),
+            );
         }
-
-        env.events().publish(
-            (Symbol::new(&env, "admin"), symbol_short!("drain")),
-            (balance, safe_address, admin),
-        );
 
         Ok(())
     }
