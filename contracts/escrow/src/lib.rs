@@ -360,7 +360,7 @@ impl EscrowContract {
             player1_deposited: false,
             player2_deposited: false,
             created_ledger: env.ledger().sequence(),
-            activated_ledger: 0,
+            activated_ledger: None,
             pending_result_ledger: 0,
             pending_winner: OptionalWinner::None,
             cancelled_ledger: None,
@@ -458,7 +458,7 @@ impl EscrowContract {
             // STATE TRANSITION: Pending → Active
             // Record the ledger at which the match became active for timeout tracking.
             m.state = MatchState::Active;
-            m.activated_ledger = env.ledger().sequence();
+            m.activated_ledger = Some(env.ledger().sequence());
             env.events().publish(
                 (Symbol::new(&env, "match"), symbol_short!("activated")),
                 match_id,
@@ -746,8 +746,9 @@ impl EscrowContract {
             return Err(Error::Unauthorized);
         }
 
+        let activated = m.activated_ledger.ok_or(Error::InvalidState)?;
         let current = env.ledger().sequence();
-        if current <= m.activated_ledger + TIMEOUT_LEDGERS {
+        if current <= activated + TIMEOUT_LEDGERS {
             // Timeout period has not elapsed yet — reject with MatchTimedOut reused
             // as "too early". We return MatchTimedOut here to keep error codes minimal;
             // callers should interpret it as "timeout not yet reached".
@@ -918,6 +919,21 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .get(&DataKey::GameId(game_id))
+    }
+
+    /// Return the token address this contract was initialized with.
+    ///
+    /// Allows frontends and integrators to verify which SEP-41 token a deployed
+    /// contract accepts without parsing raw WASM storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Unauthorized`] if the contract has not been initialized yet.
+    pub fn get_token(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Token)
+            .ok_or(Error::Unauthorized)
     }
 
     /// Read a match by ID.
