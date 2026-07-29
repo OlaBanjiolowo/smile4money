@@ -1916,6 +1916,37 @@ fn test_escrow_balance_zero_after_cancel() {
     assert_eq!(token_client.balance(&player1), 1000); // fully refunded
 }
 
+// Issue #1125: get_escrow_balance returns the full pot while the match is PendingResult.
+#[test]
+fn test_escrow_balance_full_pot_while_pending_result() {
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let stake = 100_i128;
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &stake,
+        &token,
+        &String::from_str(&env, "pending_result_balance"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    assert_eq!(client.get_escrow_balance(&id), stake * 2);
+
+    client.submit_result(
+        &id,
+        &String::from_str(&env, "pending_result_balance"),
+        &Winner::Player1,
+        &oracle,
+    );
+
+    assert_eq!(client.get_match(&id).state, MatchState::PendingResult);
+    assert_eq!(client.get_escrow_balance(&id), stake * 2);
+}
+
 // Issue #180: Once both players have deposited the match transitions to Active.
 // cancel_match must be rejected for Active matches — neither player can unilaterally
 // cancel after both have committed funds. The only valid exit is submit_result by the oracle.
