@@ -354,6 +354,11 @@ impl EscrowContract {
             return Err(Error::AlreadyExists);
         }
 
+        // Capture the event values *before* the locals are moved into the Match struct.
+        let event_player1 = player1.clone();
+        let event_player2 = player2.clone();
+        let event_game_id = game_id.clone();
+
         let m = Match {
             id,
             player1,
@@ -395,7 +400,7 @@ impl EscrowContract {
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("created")),
-            (id, m.player1, m.player2, stake_amount, m.game_id),
+            (id, event_player1, event_player2, stake_amount, event_game_id),
         );
 
         Ok(id)
