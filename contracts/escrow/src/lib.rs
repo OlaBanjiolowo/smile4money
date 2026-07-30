@@ -155,6 +155,15 @@ impl EscrowContract {
             .unwrap_or(0)
     }
 
+    /// Return the total number of matches ever created.
+    ///
+    /// Exposed as a public read-only view so that frontends and off-chain tooling
+    /// can efficiently query the total match count for pagination and progress
+    /// displays without needing to enumerate via `list_matches`.
+    pub fn match_count(env: Env) -> u64 {
+        Self::get_match_count(&env)
+    }
+
     fn validate_match_id(env: &Env, match_id: u64) -> Result<(), Error> {
         if match_id >= Self::get_match_count(env) {
             return Err(Error::MatchNotFound);
