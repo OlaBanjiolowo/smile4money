@@ -137,6 +137,11 @@ pub struct EscrowContract;
 impl EscrowContract {
     /// Return whether the contract is currently paused.
     pub fn is_paused(env: Env) -> bool {
+        Self::paused(&env)
+    }
+
+    /// Internal helper that checks the paused flag using a borrow, avoiding a clone.
+    fn paused(env: &Env) -> bool {
         env.storage()
             .instance()
             .get(&DataKey::Paused)
@@ -311,7 +316,7 @@ impl EscrowContract {
     ) -> Result<u64, Error> {
         player1.require_auth();
 
-        if Self::is_paused(env.clone()) {
+        if Self::paused(&env) {
             return Err(Error::ContractPaused);
         }
         if stake_amount < MIN_STAKE {
@@ -410,11 +415,13 @@ impl EscrowContract {
     pub fn deposit(env: Env, match_id: u64, player: Address) -> Result<(), Error> {
         player.require_auth();
 
-        if Self::is_paused(env.clone()) {
+        // Validate match_id first — it is a cheap storage-count check and can
+        // short-circuit before any more expensive work (including the pause check).
+        Self::validate_match_id(&env, match_id)?;
+
+        if Self::paused(&env) {
             return Err(Error::ContractPaused);
         }
-
-        Self::validate_match_id(&env, match_id)?;
 
         let mut m: Match = env
             .storage()
@@ -511,7 +518,7 @@ impl EscrowContract {
         winner: Winner,
         caller: Address,
     ) -> Result<(), Error> {
-        if Self::is_paused(env.clone()) {
+        if Self::paused(&env) {
             return Err(Error::ContractPaused);
         }
 
@@ -892,7 +899,7 @@ impl EscrowContract {
         }
         caller.require_auth();
 
-        if !Self::is_paused(env.clone()) {
+        if !Self::paused(&env) {
             return Err(Error::NotPaused);
         }
 
