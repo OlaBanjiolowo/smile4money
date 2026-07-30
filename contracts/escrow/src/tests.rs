@@ -7,6 +7,7 @@ use soroban_sdk::{
         storage::Persistent as _,
         Address as _,
         Events,
+        Ledger as _,
     },
     token::{Client as TokenClient, StellarAssetClient},
     vec, Address, Env, IntoVal, String, Symbol, TryFromVal,
@@ -486,25 +487,92 @@ fn test_cancel_with_both_deposits_requires_both_auth() {
 }
 
 #[test]
-fn test_cancel_active_match_fails() {
+fn test_cancel_active_match_unilateral_fails() {
+    use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
+
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+
+    let token_id = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_addr = token_id.address();
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+
+    env.mock_all_auths();
+    asset_client.mint(&player1, &1000);
+    asset_client.mint(&player2, &1000);
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let safe_address = Address::generate(&env);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address);
+    asset_client.mint(&contract_id, &crate::ESCROW_RESERVE_BUFFER_STROOPS);
+
+    let expiration = env.ledger().sequence() + 1000000;
+    let token_client = TokenClient::new(&env, &token_addr);
+    token_client.approve(&player1, &contract_id, &1000, &expiration);
+    token_client.approve(&player2, &contract_id, &1000, &expiration);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token_addr,
+        &String::from_str(&env, "active_cancel"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+
+    // Unilateral cancel (only player1 auth) must be rejected
+    env.mock_auths(&[MockAuth {
+        address: &player1,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "cancel_match",
+            args: (id, player1.clone()).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    assert!(
+        client.try_cancel_match(&id, &player1).is_err(),
+        "unilateral cancel by player1 must be rejected for Active match"
+    );
+
+    // Match must remain Active
+    env.mock_all_auths();
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+}
+
+#[test]
+fn test_cancel_active_match_mutual_succeeds() {
     let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
 
     let id = client.create_match(
         &player1,
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "active_cancel"),
+        &String::from_str(&env, "active_mutual_cancel"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
 
-    assert_eq!(
-        client.try_cancel_match(&id, &player1),
-        Err(Ok(Error::InvalidState))
-    );
+    // Mutual cancel (mock_all_auths covers both) must succeed
+    client.cancel_match(&id, &player1);
+
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+    // Both players refunded
+    assert_eq!(token_client.balance(&player1), 1000);
+    assert_eq!(token_client.balance(&player2), 1000);
+    assert_eq!(client.get_escrow_balance(&id), 0);
 }
 
 #[test]
@@ -1917,12 +1985,13 @@ fn test_escrow_balance_zero_after_cancel() {
 }
 
 // Issue #180: Once both players have deposited the match transitions to Active.
-// cancel_match must be rejected for Active matches — neither player can unilaterally
-// cancel after both have committed funds. The only valid exit is submit_result by the oracle.
+// Mutual cancel_match is now allowed for Active matches — both players must authorize.
+// Unilateral cancel (only one player's auth) must still be rejected.
 #[test]
 fn test_cancel_with_both_deposits_requires_auth() {
     let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
 
     let id = client.create_match(
         &player1,
@@ -1938,18 +2007,14 @@ fn test_cancel_with_both_deposits_requires_auth() {
     client.deposit(&id, &player2);
     assert_eq!(client.get_match(&id).state, MatchState::Active);
 
-    // Neither player can cancel once the match is Active
-    assert_eq!(
-        client.try_cancel_match(&id, &player1),
-        Err(Ok(Error::InvalidState))
-    );
-    assert_eq!(
-        client.try_cancel_match(&id, &player2),
-        Err(Ok(Error::InvalidState))
-    );
+    // With mock_all_auths, mutual cancel must succeed
+    client.cancel_match(&id, &player1);
 
-    // Match must remain Active — funds are safe
-    assert_eq!(client.get_match(&id).state, MatchState::Active);
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+    // Both players are fully refunded
+    assert_eq!(token_client.balance(&player1), 1000);
+    assert_eq!(token_client.balance(&player2), 1000);
+    assert_eq!(client.get_escrow_balance(&id), 0);
 }
 
 // Issue #100: Test that submit_result on a cancelled match returns InvalidState (no deposit)
@@ -2391,9 +2456,307 @@ fn test_instance_ttl_extended_on_initialize() {
     assert!(instance_ttl >= crate::INSTANCE_LIFETIME_THRESHOLD);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Issue #1122 — Property-based tests for state machine transition invariants
-// ═══════════════════════════════════════════════════════════════════════════
+// ── claim_timeout tests ───────────────────────────────────────────────────────
+
+/// claim_timeout called before the timeout period elapses must return
+/// Error::TimeoutNotReached (not MatchTimedOut — semantically correct error).
+#[test]
+fn test_claim_timeout_before_period_returns_timeout_not_reached() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "claim_too_early"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+
+    // Timeout period has NOT elapsed — must get TimeoutNotReached
+    assert_eq!(
+        client.try_claim_timeout(&id, &player1),
+        Err(Ok(Error::TimeoutNotReached)),
+        "claim_timeout too early must return TimeoutNotReached"
+    );
+}
+
+/// claim_timeout called after the timeout period elapses must succeed and refund both players.
+#[test]
+fn test_claim_timeout_after_period_succeeds() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "claim_after_timeout"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+
+    // Advance ledger past TIMEOUT_LEDGERS (120_960)
+    let current = env.ledger().sequence();
+    env.ledger().set_sequence_number(current + crate::TIMEOUT_LEDGERS + 1);
+
+    client.claim_timeout(&id, &player1);
+
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+    // Both players fully refunded
+    assert_eq!(token_client.balance(&player1), 1000);
+    assert_eq!(token_client.balance(&player2), 1000);
+    assert_eq!(client.get_escrow_balance(&id), 0);
+}
+
+/// claim_timeout by a non-player must return Unauthorized.
+#[test]
+fn test_claim_timeout_by_non_player_fails() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "claim_non_player"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    let current = env.ledger().sequence();
+    env.ledger().set_sequence_number(current + crate::TIMEOUT_LEDGERS + 1);
+
+    let stranger = Address::generate(&env);
+    assert_eq!(
+        client.try_claim_timeout(&id, &stranger),
+        Err(Ok(Error::Unauthorized))
+    );
+}
+
+/// claim_timeout on a non-Active match must return InvalidState.
+#[test]
+fn test_claim_timeout_on_pending_match_fails() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "claim_pending"),
+        &Platform::Lichess,
+    );
+    // Only one deposit — still Pending
+    client.deposit(&id, &player1);
+
+    let current = env.ledger().sequence();
+    env.ledger().set_sequence_number(current + crate::TIMEOUT_LEDGERS + 1);
+
+    assert_eq!(
+        client.try_claim_timeout(&id, &player1),
+        Err(Ok(Error::InvalidState))
+    );
+}
+
+// ── finalize_result authorization tests ──────────────────────────────────────
+
+/// finalize_result called by a random account must return Unauthorized.
+#[test]
+fn test_finalize_result_by_stranger_fails() {
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "finalize_unauth"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(
+        &id,
+        &String::from_str(&env, "finalize_unauth"),
+        &Winner::Player1,
+        &oracle,
+    );
+
+    // Advance past dispute window
+    let current = env.ledger().sequence();
+    env.ledger().set_sequence_number(current + crate::DISPUTE_WINDOW_LEDGERS + 1);
+
+    let stranger = Address::generate(&env);
+    assert_eq!(
+        client.try_finalize_result(&id, &stranger),
+        Err(Ok(Error::Unauthorized)),
+        "finalize_result by stranger must return Unauthorized"
+    );
+}
+
+/// finalize_result called by player1 (a matched player) must succeed.
+#[test]
+fn test_finalize_result_by_player1_succeeds() {
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "finalize_by_p1"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(
+        &id,
+        &String::from_str(&env, "finalize_by_p1"),
+        &Winner::Player1,
+        &oracle,
+    );
+
+    let current = env.ledger().sequence();
+    env.ledger().set_sequence_number(current + crate::DISPUTE_WINDOW_LEDGERS + 1);
+
+    client.finalize_result(&id, &player1);
+    assert_eq!(client.get_match(&id).state, MatchState::Completed);
+}
+
+/// finalize_result called by the oracle must succeed.
+#[test]
+fn test_finalize_result_by_oracle_succeeds() {
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "finalize_by_oracle"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(
+        &id,
+        &String::from_str(&env, "finalize_by_oracle"),
+        &Winner::Player2,
+        &oracle,
+    );
+
+    let current = env.ledger().sequence();
+    env.ledger().set_sequence_number(current + crate::DISPUTE_WINDOW_LEDGERS + 1);
+
+    client.finalize_result(&id, &oracle);
+    assert_eq!(client.get_match(&id).state, MatchState::Completed);
+}
+
+/// finalize_result called by the admin must succeed.
+#[test]
+fn test_finalize_result_by_admin_succeeds() {
+    let (env, contract_id, oracle, player1, player2, token, admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "finalize_by_admin"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(
+        &id,
+        &String::from_str(&env, "finalize_by_admin"),
+        &Winner::Draw,
+        &oracle,
+    );
+
+    let current = env.ledger().sequence();
+    env.ledger().set_sequence_number(current + crate::DISPUTE_WINDOW_LEDGERS + 1);
+
+    client.finalize_result(&id, &admin);
+    assert_eq!(client.get_match(&id).state, MatchState::Completed);
+}
+
+// ── Active state mutual cancel E2E ───────────────────────────────────────────
+
+/// An Active match can be cancelled by player2 when both players authorize.
+#[test]
+fn test_cancel_active_match_by_player2_succeeds() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "active_cancel_p2"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+
+    // Mutual cancel triggered by player2
+    client.cancel_match(&id, &player2);
+
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+    assert_eq!(token_client.balance(&player1), 1000);
+    assert_eq!(token_client.balance(&player2), 1000);
+}
+
+/// A completed match still cannot be cancelled after an Active mutual cancel scenario.
+#[test]
+fn test_cancel_completed_match_still_fails() {
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "completed_cancel2"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(
+        &id,
+        &String::from_str(&env, "completed_cancel2"),
+        &Winner::Player1,
+        &oracle,
+    );
+    assert_eq!(client.get_match(&id).state, MatchState::Completed);
+
+    assert_eq!(
+        client.try_cancel_match(&id, &player1),
+        Err(Ok(Error::InvalidState))
+    );
+}
+
+
 //
 // These tests use proptest to generate exhaustive random call sequences and
 // assert that any operation issued in the wrong state is always rejected with
@@ -2482,7 +2845,7 @@ mod proptest_state_machine {
             client.submit_result(&id, &String::from_str(&env, "prop-completed"), &winner, &oracle);
             // Advance ledger past the dispute window
             env.ledger().set_sequence_number(env.ledger().sequence() + 17_281);
-            client.finalize_result(&id);
+            client.finalize_result(&id, &player1);
 
             // After Completed: every mutating call must be rejected
             assert_eq!(
@@ -2575,16 +2938,19 @@ mod proptest_state_machine {
         }
     }
 
-    // ── invariant 3: Active → only valid exit is submit_result ───────────────
+    // ── invariant 3: Active → unilateral cancel rejected, mutual cancel allowed ─────
 
-    /// Once a match is `Active` (both players deposited), `cancel_match` must
-    /// always be rejected with `InvalidState` — the only valid exit from Active
-    /// is through the oracle path.
+    /// Once a match is `Active` (both players deposited), a *unilateral* `cancel_match`
+    /// (only one player's auth) must always be rejected — the contract requires both
+    /// players to authorize. A mutual cancel (both auths present) is allowed and
+    /// should return `Ok`.
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(20))]
 
         #[test]
-        fn prop_active_cancel_always_rejected(cancel_caller_is_p1 in proptest::bool::ANY) {
+        fn prop_active_cancel_unilateral_always_rejected(cancel_caller_is_p1 in proptest::bool::ANY) {
+            use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
+
             let (env, contract_id, _oracle, player1, player2, token, _admin) = prop_setup();
             let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -2599,15 +2965,28 @@ mod proptest_state_machine {
             client.deposit(&id, &player1);
             client.deposit(&id, &player2);
 
-            assert_eq!(client.get_match(&id).state, MatchState::Active);
+            prop_assert_eq!(client.get_match(&id).state, MatchState::Active);
 
-            let caller = if cancel_caller_is_p1 { &player1 } else { &player2 };
+            // Provide only one player's auth — must be rejected
+            let (caller, fn_caller) = if cancel_caller_is_p1 {
+                (&player1, player1.clone())
+            } else {
+                (&player2, player2.clone())
+            };
+            env.mock_auths(&[MockAuth {
+                address: caller,
+                invoke: &MockAuthInvoke {
+                    contract: &contract_id,
+                    fn_name: "cancel_match",
+                    args: (id, fn_caller.clone()).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }]);
+
             let result = client.try_cancel_match(&id, caller);
-
-            prop_assert_eq!(
-                result,
-                Err(Ok(Error::InvalidState)),
-                "cancel_match on Active match must return InvalidState"
+            prop_assert!(
+                result.is_err(),
+                "unilateral cancel_match on Active match must be rejected"
             );
         }
     }
@@ -2703,7 +3082,7 @@ mod proptest_state_machine {
                 client.deposit(&id, &player2);
                 client.submit_result(&id, &game_id, &Winner::Player1, &oracle);
                 env.ledger().set_sequence_number(env.ledger().sequence() + 17_281);
-                client.finalize_result(&id);
+                client.finalize_result(&id, &player1);
             } else {
                 client.cancel_match(&id, &player1);
             }
@@ -2716,7 +3095,7 @@ mod proptest_state_machine {
             prop_assert!(
                 client.try_submit_result(&id, &game_id, &Winner::Player1, &oracle).is_err()
             );
-            prop_assert!(client.try_finalize_result(&id).is_err());
+            prop_assert!(client.try_finalize_result(&id, &player1).is_err());
         }
     }
 }

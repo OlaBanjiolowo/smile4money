@@ -17,8 +17,9 @@
 //!                │               │
 //!                ▼               ▼
 //!            Cancelled        Active ──── claim_timeout() ──► Cancelled
-//!                           (funds held)
-//!                                │
+//!                           (funds held)         │
+//!                                │        cancel_match()
+//!                                │        (both players) ──► Cancelled
 //!                         submit_result()
 //!                          (oracle only)
 //!                                │
@@ -119,14 +120,13 @@ const TIMEOUT_LEDGERS: u32 = 120_960;
 const ESCROW_RESERVE_BUFFER_STROOPS: i128 = 15_000_000;
 
 fn is_zero_address(env: &Env, addr: &Address) -> bool {
-    let zero_address: Address = TryFromVal::try_from_val(
-        &env,
-        &String::from_str(
-            &env,
-            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-        ),
-    )
-    .expect("invalid zero address constant");
+    // The all-zeros Stellar account key encodes to this strkey.
+    // We construct the Address via the ScAddress XDR path since
+    // TryFromVal<Env, String> is not implemented for Address.
+    use soroban_sdk::xdr::{AccountId, PublicKey, ScAddress, Uint256};
+    let zero_key = Uint256([0u8; 32]);
+    let sc_addr = ScAddress::Account(AccountId(PublicKey::PublicKeyTypeEd25519(zero_key)));
+    let zero_address = Address::try_from_val(env, &sc_addr).expect("invalid zero address");
     addr == &zero_address
 }
 
@@ -136,7 +136,7 @@ pub struct EscrowContract;
 #[contractimpl]
 impl EscrowContract {
     /// Return whether the contract is currently paused.
-    pub fn is_paused(env: Env) -> bool {
+    pub fn is_paused(env: &Env) -> bool {
         env.storage()
             .instance()
             .get(&DataKey::Paused)
@@ -311,7 +311,7 @@ impl EscrowContract {
     ) -> Result<u64, Error> {
         player1.require_auth();
 
-        if Self::is_paused(env.clone()) {
+        if Self::is_paused(&env) {
             return Err(Error::ContractPaused);
         }
         if stake_amount < MIN_STAKE {
@@ -405,7 +405,7 @@ impl EscrowContract {
     pub fn deposit(env: Env, match_id: u64, player: Address) -> Result<(), Error> {
         player.require_auth();
 
-        if Self::is_paused(env.clone()) {
+        if Self::is_paused(&env) {
             return Err(Error::ContractPaused);
         }
 
@@ -506,7 +506,7 @@ impl EscrowContract {
         winner: Winner,
         caller: Address,
     ) -> Result<(), Error> {
-        if Self::is_paused(env.clone()) {
+        if Self::is_paused(&env) {
             return Err(Error::ContractPaused);
         }
 
@@ -638,15 +638,22 @@ impl EscrowContract {
 
     /// Finalize a pending result and execute payout after the dispute window has expired.
     ///
-    /// Can be called by anyone once `DISPUTE_WINDOW_LEDGERS` have elapsed since the oracle
-    /// submitted the result. Executes the payout based on `pending_winner` and transitions
-    /// the match to `Completed`.
+    /// May only be called by one of the **matched players** (`player1` or `player2`),
+    /// the registered **oracle**, or the **admin**. This prevents a third party from
+    /// triggering payout transactions on behalf of players (e.g. to collect fee rebates
+    /// or grief a player who intended to call `finalize_result` themselves).
+    ///
+    /// # Arguments
+    ///
+    /// * `match_id` — The match to finalize.
+    /// * `caller`   — Must be `player1`, `player2`, the oracle, or the admin; must authorize.
     ///
     /// # Errors
     ///
+    /// * [`Error::Unauthorized`]        — caller is not a matched player, the oracle, or the admin.
     /// * [`Error::InvalidState`]        — match is not in `PendingResult` state.
     /// * [`Error::DisputeWindowActive`] — dispute window has not yet expired.
-    pub fn finalize_result(env: Env, match_id: u64) -> Result<(), Error> {
+    pub fn finalize_result(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
         Self::validate_match_id(&env, match_id)?;
 
         let mut m: Match = env
@@ -654,6 +661,25 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
+
+        // Authorisation: only player1, player2, the oracle, or the admin may
+        // call finalize_result. This stops any random account from triggering
+        // the payout (e.g. to collect fee rebates or grief a player).
+        let oracle: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)?;
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+
+        if caller != m.player1 && caller != m.player2 && caller != oracle && caller != admin {
+            return Err(Error::Unauthorized);
+        }
+        caller.require_auth();
 
         if m.state != MatchState::PendingResult {
             return Err(Error::InvalidState);
@@ -729,9 +755,10 @@ impl EscrowContract {
     ///
     /// # Errors
     ///
-    /// * [`Error::Unauthorized`]  — caller is neither player.
-    /// * [`Error::InvalidState`]  — match is not `Active`.
-    /// * [`Error::MatchTimedOut`] — not enough ledgers have passed yet (too early to claim).
+    /// * [`Error::Unauthorized`]       — caller is neither player.
+    /// * [`Error::InvalidState`]       — match is not `Active`.
+    /// * [`Error::TimeoutNotReached`]  — `TIMEOUT_LEDGERS` have not yet elapsed since the
+    ///                                   match became `Active`; it is too early to reclaim.
     pub fn claim_timeout(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
         caller.require_auth();
 
@@ -754,10 +781,8 @@ impl EscrowContract {
 
         let current = env.ledger().sequence();
         if current <= m.activated_ledger + TIMEOUT_LEDGERS {
-            // Timeout period has not elapsed yet — reject with MatchTimedOut reused
-            // as "too early". We return MatchTimedOut here to keep error codes minimal;
-            // callers should interpret it as "timeout not yet reached".
-            return Err(Error::MatchTimedOut);
+            // Timeout period has not elapsed yet — the match is still live.
+            return Err(Error::TimeoutNotReached);
         }
 
         let client = token::Client::new(&env, &m.token);
@@ -786,14 +811,16 @@ impl EscrowContract {
         Ok(())
     }
 
-    /// Cancel a pending match and refund any deposits.
+    /// Cancel a match and refund any deposits.
     ///
     /// Authorization model:
-    /// - If neither or only one player has deposited: the calling player's auth suffices.
-    /// - If both players have deposited: both players must authorize, because cancelling
-    ///   would withdraw funds that the other player has already committed.
+    /// - **Pending state** (neither or only one player deposited): the calling player's auth suffices.
+    /// - **Pending state** (both players deposited, rare edge case): both players must authorize.
+    /// - **Active state** (both players deposited, match is live): both `player1` and `player2`
+    ///   must authorize, enabling a mutual cancel without waiting for the 7-day
+    ///   `claim_timeout`. Both stakes are refunded immediately.
     ///
-    /// Cancelation is allowed while the contract is paused so players can recover funds.
+    /// Cancellation is allowed while the contract is paused so players can recover funds.
     pub fn cancel_match(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
         Self::validate_match_id(&env, match_id)?;
 
@@ -803,7 +830,9 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
-        if m.state != MatchState::Pending {
+        // Allow cancellation from Pending or Active state only.
+        // Completed and Cancelled are terminal — no further transitions.
+        if m.state != MatchState::Pending && m.state != MatchState::Active {
             return Err(Error::InvalidState);
         }
 
@@ -814,7 +843,14 @@ impl EscrowContract {
             return Err(Error::Unauthorized);
         }
 
-        if m.player1_deposited && m.player2_deposited {
+        if m.state == MatchState::Active {
+            // Active state: both players must mutually agree to cancel.
+            // Require authorization from both parties since both have already
+            // committed funds and neither should be able to unilaterally cancel.
+            m.player1.require_auth();
+            m.player2.require_auth();
+        } else if m.player1_deposited && m.player2_deposited {
+            // Pending state but both deposited (rare): same mutual-auth requirement.
             m.player1.require_auth();
             m.player2.require_auth();
         } else {
@@ -887,7 +923,7 @@ impl EscrowContract {
         }
         caller.require_auth();
 
-        if !Self::is_paused(env.clone()) {
+        if !Self::is_paused(&env) {
             return Err(Error::NotPaused);
         }
 
