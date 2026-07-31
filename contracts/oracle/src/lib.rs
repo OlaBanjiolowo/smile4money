@@ -142,10 +142,6 @@ impl OracleContract {
             return Err(Error::AlreadySubmitted);
         }
 
-        if game_id.len() > 64 {
-            return Err(Error::InvalidGameId);
-        }
-
         let ledger_seq = env.ledger().sequence();
         // SAFETY: Soroban's single-execution model prevents re-entrancy; no cross-contract
         // calls are made here, so the state written below cannot be observed by a
