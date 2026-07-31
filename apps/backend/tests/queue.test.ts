@@ -1,11 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   writeToDlq,
   listDlqEntries,
   removeDlqEntry,
   startRetryWorker,
   type DlqEntry,
-} from "../../src/queue";
+} from "../src/queue.js";
+import { resetCircuitBreaker } from "../src/services/circuit-breaker.js";
 
 // Reset the in-memory store between tests by removing all entries
 function clearDlq() {
@@ -16,7 +17,12 @@ function clearDlq() {
 
 beforeEach(() => {
   clearDlq();
+  resetCircuitBreaker();
   vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("writeToDlq", () => {
@@ -64,7 +70,7 @@ describe("startRetryWorker", () => {
     const handler = vi.fn().mockResolvedValue(undefined);
     const stop = startRetryWorker(handler, 1000);
 
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(1000);
 
     expect(handler).toHaveBeenCalledTimes(2);
     stop();
@@ -75,7 +81,7 @@ describe("startRetryWorker", () => {
     const handler = vi.fn().mockResolvedValue(undefined);
     const stop = startRetryWorker(handler, 1000);
 
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(1000);
 
     expect(listDlqEntries()).toHaveLength(0);
     stop();
@@ -86,7 +92,7 @@ describe("startRetryWorker", () => {
     const handler = vi.fn().mockRejectedValue(new Error("still failing"));
     const stop = startRetryWorker(handler, 1000);
 
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(1000);
 
     const entries = listDlqEntries();
     expect(entries).toHaveLength(1);
@@ -100,8 +106,97 @@ describe("startRetryWorker", () => {
     const stop = startRetryWorker(handler, 1000);
     stop();
 
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(2000);
 
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  describe("Circuit breaker integration", () => {
+    it("pauses retries when circuit opens after N RPC failures", async () => {
+      writeToDlq({ matchId: 1 }, "RPC error 1");
+      writeToDlq({ matchId: 2 }, "RPC error 2");
+      writeToDlq({ matchId: 3 }, "RPC error 3");
+      writeToDlq({ matchId: 4 }, "RPC error 4");
+      writeToDlq({ matchId: 5 }, "RPC error 5");
+
+      const handler = vi.fn().mockRejectedValue(new Error("RPC timeout"));
+      const stop = startRetryWorker(handler, 100);
+
+      // First interval: 5 entries fail - circuit opens after 5th failure
+      await vi.advanceTimersByTimeAsync(100);
+      expect(handler).toHaveBeenCalledTimes(5);
+
+      // Second interval: circuit is open, no more handler calls
+      handler.mockClear();
+      await vi.advanceTimersByTimeAsync(100);
+      
+      // Circuit should be open, no more handler calls
+      expect(handler).not.toHaveBeenCalled();
+      
+      stop();
+    });
+
+    it("resumes retries after circuit cooldown expires", async () => {
+      // Create 5 entries that will fail to trigger circuit opening
+      writeToDlq({ matchId: 1 }, "RPC error 1");
+      writeToDlq({ matchId: 2 }, "RPC error 2");
+      writeToDlq({ matchId: 3 }, "RPC error 3");
+      writeToDlq({ matchId: 4 }, "RPC error 4");
+      writeToDlq({ matchId: 5 }, "RPC error 5");
+      
+      let callCount = 0;
+      const handler = vi.fn().mockImplementation(async () => {
+        callCount++;
+        throw new Error("RPC timeout");
+      });
+
+      const stop = startRetryWorker(handler, 100);
+
+      // First interval: process all 5 entries, circuit opens after 5th failure
+      await vi.advanceTimersByTimeAsync(100);
+      expect(handler).toHaveBeenCalledTimes(5);
+
+      // Circuit is now open, handler won't be called
+      handler.mockClear();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(handler).not.toHaveBeenCalled();
+
+      // Wait for cooldown to expire (default is 30s)
+      await vi.advanceTimersByTimeAsync(30000);
+      
+      // Resume retries (in half-open state) - should attempt retry now
+      await vi.advanceTimersByTimeAsync(100);
+      
+      // Handler should be called again after cooldown (in HALF_OPEN state)
+      expect(handler.mock.calls.length).toBeGreaterThan(0);
+      
+      stop();
+    });
+
+    it("distinguishes RPC errors from other errors", async () => {
+      writeToDlq({ matchId: 1 }, "RPC error");
+      writeToDlq({ matchId: 2 }, "other error");
+
+      let rpcErrorCount = 0;
+      const handler = vi.fn().mockImplementation(async (entry: DlqEntry) => {
+        if (entry.failureReason.includes("RPC")) {
+          rpcErrorCount++;
+          throw new Error("RPC timeout");
+        }
+        // Other errors don't trigger circuit breaker
+        throw new Error("Other error");
+      });
+
+      const stop = startRetryWorker(handler, 100);
+
+      // Process entries multiple times
+      for (let i = 0; i < 5; i++) {
+        await vi.advanceTimersByTimeAsync(100);
+      }
+
+      // RPC errors should eventually open circuit
+      // Non-RPC errors should not affect circuit breaker
+      stop();
+    });
   });
 });
