@@ -143,6 +143,30 @@ impl EscrowContract {
             .unwrap_or(false)
     }
 
+    /// Return the configured dispute window duration in ledgers.
+    ///
+    /// This is the time the admin has to call [`override_result`](EscrowContract::override_result)
+    /// after the oracle submits a result, before it becomes final. Defaults to
+    /// `DISPUTE_WINDOW_LEDGERS` (~24 hours) if not configured at initialization.
+    pub fn get_dispute_window_ledgers(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::DisputeWindowLedgers)
+            .unwrap_or(DISPUTE_WINDOW_LEDGERS)
+    }
+
+    /// Return the configured match timeout duration in ledgers.
+    ///
+    /// This is the time an active match can remain without an oracle result
+    /// before either player may call [`claim_timeout`](EscrowContract::claim_timeout).
+    /// Defaults to `TIMEOUT_LEDGERS` (~7 days) if not configured at initialization.
+    pub fn get_timeout_ledgers(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::TimeoutLedgers)
+            .unwrap_or(TIMEOUT_LEDGERS)
+    }
+
     fn get_match_count(env: &Env) -> u64 {
         env.storage()
             .instance()
@@ -186,6 +210,22 @@ impl EscrowContract {
     /// changed afterwards. This eliminates the rug-pull vector where a compromised or
     /// malicious admin could call `emergency_drain` with an arbitrary destination address.
     ///
+    /// The `dispute_window_ledgers` and `timeout_ledgers` parameters allow configurable
+    /// timing for different deployments (testnet vs mainnet, casual vs high-stakes matches).
+    /// If not provided, they default to `DISPUTE_WINDOW_LEDGERS` (~24 hours) and
+    /// `TIMEOUT_LEDGERS` (~7 days) respectively.
+    ///
+    /// # Arguments
+    ///
+    /// * `oracle` — The address of the trusted oracle contract.
+    /// * `admin` — The address of the contract administrator.
+    /// * `token` — The SEP-41 token address for staking.
+    /// * `safe_address` — The immutable destination for emergency drain operations.
+    /// * `dispute_window_ledgers` — The duration of the dispute window in ledgers. If `None`,
+    ///   defaults to `DISPUTE_WINDOW_LEDGERS`.
+    /// * `timeout_ledgers` — The timeout duration for active matches in ledgers. If `None`,
+    ///   defaults to `TIMEOUT_LEDGERS`.
+    ///
     /// # Panics
     ///
     /// Panics with `"Contract already initialized"` if called more than once.
@@ -195,6 +235,8 @@ impl EscrowContract {
         admin: Address,
         token: Address,
         safe_address: Address,
+        dispute_window_ledgers: Option<u32>,
+        timeout_ledgers: Option<u32>,
     ) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Oracle) {
             panic!("Contract already initialized");
@@ -209,6 +251,19 @@ impl EscrowContract {
             .set(&DataKey::SafeAddress, &safe_address);
         env.storage().instance().set(&DataKey::MatchCount, &0u64);
         env.storage().instance().set(&DataKey::Paused, &false);
+
+        // Store the configured dispute window, or use the default
+        let dispute_window = dispute_window_ledgers.unwrap_or(DISPUTE_WINDOW_LEDGERS);
+        env.storage()
+            .instance()
+            .set(&DataKey::DisputeWindowLedgers, &dispute_window);
+
+        // Store the configured timeout, or use the default
+        let timeout = timeout_ledgers.unwrap_or(TIMEOUT_LEDGERS);
+        env.storage()
+            .instance()
+            .set(&DataKey::TimeoutLedgers, &timeout);
+
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
@@ -322,6 +377,14 @@ impl EscrowContract {
         }
         if player1 == player2 {
             return Err(Error::InvalidPlayers);
+        }
+        // Validate that neither player is the zero/burn address
+        let zero_address = String::from_str(
+            &env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        );
+        if player1.to_string() == zero_address || player2.to_string() == zero_address {
+            return Err(Error::InvalidAddress);
         }
         let game_id_len = game_id.len();
         if game_id_len == 0 || game_id_len > MAX_GAME_ID_LEN {
@@ -458,6 +521,23 @@ impl EscrowContract {
             m.player1_deposited = true;
         } else {
             m.player2_deposited = true;
+        }
+
+        // Check if exactly one player has now deposited (half-funded state)
+        let one_deposited = (m.player1_deposited as u8) + (m.player2_deposited as u8) == 1;
+
+        if one_deposited {
+            // STATE TRANSITION: Pending → Half-Funded (one player deposited)
+            // Emit event to signal this observability milestone
+            let player_label = if is_p1 {
+                symbol_short!("player1")
+            } else {
+                symbol_short!("player2")
+            };
+            env.events().publish(
+                (Symbol::new(&env, "match"), symbol_short!("half_fun")),
+                (match_id, player_label, m.stake_amount),
+            );
         }
 
         if m.player1_deposited && m.player2_deposited {
@@ -612,7 +692,8 @@ impl EscrowContract {
         // Ensure the dispute window has not yet expired; after expiry the result
         // is final and must be processed via finalize_result.
         let current = env.ledger().sequence();
-        if current > m.pending_result_ledger + DISPUTE_WINDOW_LEDGERS {
+        let dispute_window = Self::get_dispute_window_ledgers(env.clone());
+        if current > m.pending_result_ledger + dispute_window {
             return Err(Error::DisputeWindowActive);
         }
 
@@ -660,7 +741,8 @@ impl EscrowContract {
         }
 
         let current = env.ledger().sequence();
-        if current <= m.pending_result_ledger + DISPUTE_WINDOW_LEDGERS {
+        let dispute_window = Self::get_dispute_window_ledgers(env.clone());
+        if current <= m.pending_result_ledger + dispute_window {
             return Err(Error::DisputeWindowActive);
         }
 
@@ -753,7 +835,8 @@ impl EscrowContract {
         }
 
         let current = env.ledger().sequence();
-        if current <= m.activated_ledger + TIMEOUT_LEDGERS {
+        let timeout = Self::get_timeout_ledgers(env.clone());
+        if current <= m.activated_ledger + timeout {
             // Timeout period has not elapsed yet — reject with MatchTimedOut reused
             // as "too early". We return MatchTimedOut here to keep error codes minimal;
             // callers should interpret it as "timeout not yet reached".
@@ -976,15 +1059,128 @@ impl EscrowContract {
 
     /// Return a page of match IDs in the range `[start, start + limit)`.
     ///
-    /// `limit` is capped at 100. IDs beyond the current match count are silently
-    /// omitted, so callers can detect the last page when the returned slice is
-    /// shorter than the requested `limit`.
+    /// # Offset-Based Pagination
+    ///
+    /// This function uses **offset-based pagination**, returning consecutive match IDs
+    /// starting from `start`. It is suitable for dense ID spaces where matches are
+    /// created frequently and ID gaps are rare.
+    ///
+    /// # Parameters
+    ///
+    /// * `start` — The first match ID to include in the result (inclusive).
+    /// * `limit` — Maximum number of IDs to return. Capped at 100 to prevent unbounded queries.
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<u64>` of match IDs in ascending order. May contain fewer than `limit` IDs if:
+    /// - The query reaches the current match count (end of data), or
+    /// - The remaining space in the vector is exhausted.
+    ///
+    /// # End-of-Data Detection
+    ///
+    /// Callers can detect the end of the full ID space when the returned vector has
+    /// **fewer than `limit` entries**. This indicates no more matches exist beyond
+    /// `start + returned_count`.
+    ///
+    /// **Important**: If matches are sparse (e.g., many were cancelled), a shorter result
+    /// **does not guarantee end-of-data** — there may be gaps in the ID sequence. Use
+    /// [`list_matches_after`](EscrowContract::list_matches_after) for cursor-based pagination
+    /// if you need to iterate over a sparse ID space.
+    ///
+    /// # Examples
+    ///
+    /// Iterate through all matches starting from ID 0:
+    /// ```text
+    /// let mut start = 0;
+    /// loop {
+    ///     let page = contract.list_matches(start, 50);
+    ///     if page.is_empty() {
+    ///         break; // No more matches
+    ///     }
+    ///     // Process page...
+    ///     if page.len() < 50 {
+    ///         break; // Last page reached
+    ///     }
+    ///     start = page.last().unwrap() + 1;
+    /// }
+    /// ```
+    ///
+    /// # Sparse ID Spaces
+    ///
+    /// If match creation is infrequent or many matches were cancelled, the ID space
+    /// becomes sparse. In this case, offset-based pagination may return short pages
+    /// even when more matches exist. Use [`list_matches_after`](EscrowContract::list_matches_after)
+    /// instead for robust pagination over sparse spaces.
     pub fn list_matches(env: Env, start: u64, limit: u32) -> Vec<u64> {
         const MAX_LIMIT: u32 = 100;
         let limit = limit.min(MAX_LIMIT);
         let count = Self::get_match_count(&env);
         let mut ids: Vec<u64> = vec![&env];
         let end = start.saturating_add(limit as u64).min(count);
+        let mut i = start;
+        while i < end {
+            ids.push_back(i);
+            i += 1;
+        }
+        ids
+    }
+
+    /// Return match IDs following a cursor position, using cursor-based pagination.
+    ///
+    /// # Cursor-Based Pagination
+    ///
+    /// This function returns consecutive match IDs **after** a given `after_match_id`.
+    /// It is designed for **sparse ID spaces** where gaps are common due to cancelled
+    /// or failed matches. Unlike offset-based pagination, cursor-based pagination
+    /// guarantees that callers can always distinguish "no more data" from "data gap."
+    ///
+    /// # Parameters
+    ///
+    /// * `after_match_id` — The cursor position. Results will start from the next valid
+    ///   match ID after this value. Pass `u64::MAX` to start from the beginning (finds ID 0).
+    /// * `limit` — Maximum number of IDs to return. Capped at 100 to prevent unbounded queries.
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<u64>` of match IDs in ascending order, all with `id > after_match_id`.
+    /// May contain fewer than `limit` IDs if the current match count is reached.
+    ///
+    /// # End-of-Data Detection
+    ///
+    /// The end of the ID space is reached when the returned vector is **empty**.
+    /// This unambiguously means: "There are no valid match IDs greater than `after_match_id`."
+    ///
+    /// # Examples
+    ///
+    /// Iterate through all matches using cursor-based pagination:
+    /// ```text
+    /// let mut cursor = u64::MAX; // Start from the beginning
+    /// loop {
+    ///     let page = contract.list_matches_after(cursor, 50);
+    ///     if page.is_empty() {
+    ///         break; // No more matches
+    ///     }
+    ///     // Process page...
+    ///     cursor = page.last().unwrap(); // Move cursor to the last ID
+    /// }
+    /// ```
+    ///
+    /// # Advantages Over Offset-Based Pagination
+    ///
+    /// - **Unambiguous end-of-data**: Empty result always means end-of-data (no false "gaps").
+    /// - **Handles sparse IDs**: Works correctly even if many matches were cancelled.
+    /// - **Stable iteration**: Adding new matches does not affect the pagination of earlier pages.
+    /// - **Cursor reuse**: A cursor remains valid even if the contract state changes between calls.
+    pub fn list_matches_after(env: Env, after_match_id: u64, limit: u32) -> Vec<u64> {
+        const MAX_LIMIT: u32 = 100;
+        let limit = limit.min(MAX_LIMIT);
+        let count = Self::get_match_count(&env);
+        let mut ids: Vec<u64> = vec![&env];
+
+        // Start from after_match_id + 1, capped at count
+        let start = after_match_id.saturating_add(1).min(count);
+        let end = start.saturating_add(limit as u64).min(count);
+
         let mut i = start;
         while i < end {
             ids.push_back(i);
