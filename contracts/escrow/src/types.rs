@@ -239,8 +239,8 @@ pub struct Match {
     /// Recorded when both players have deposited and the match becomes `Active`.
     /// Used by [`claim_timeout`](crate::EscrowContract::claim_timeout) to verify
     /// that `TIMEOUT_LEDGERS` have elapsed without an oracle result.
-    /// `0` when the match has not yet become `Active`.
-    pub activated_ledger: u32,
+    /// `None` when the match has not yet become `Active`.
+    pub activated_ledger: Option<u32>,
 
     /// The ledger sequence number at which the oracle submitted a result
     /// (i.e. when the match transitioned to `PendingResult`).

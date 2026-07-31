@@ -915,8 +915,136 @@ fn test_create_match_empty_game_id_fails() {
     );
 }
 
+// ── #1029: game_id character-set validation ──────────────────────────────────
+
 #[test]
-fn test_create_match_wrong_token_fails() {
+fn test_create_match_valid_game_id_alphanum() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    // Pure alphanumeric — should succeed
+    assert!(client
+        .try_create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &String::from_str(&env, "abc123XYZ"),
+            &Platform::Lichess,
+        )
+        .is_ok());
+}
+
+#[test]
+fn test_create_match_valid_game_id_with_hyphen_and_underscore() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    // Hyphens and underscores are permitted
+    assert!(client
+        .try_create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &String::from_str(&env, "game-001_ranked"),
+            &Platform::Lichess,
+        )
+        .is_ok());
+}
+
+#[test]
+fn test_create_match_game_id_with_null_byte_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    // Null byte — must be rejected
+    let game_id = String::from_bytes(&env, &[b'a', b'b', 0x00, b'c']);
+    assert_eq!(
+        client.try_create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &game_id,
+            &Platform::Lichess,
+        ),
+        Err(Ok(Error::InvalidGameId))
+    );
+}
+
+#[test]
+fn test_create_match_game_id_with_control_char_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    // Tab control character (0x09) — must be rejected
+    let game_id = String::from_bytes(&env, &[b'g', b'a', b'm', b'e', 0x09]);
+    assert_eq!(
+        client.try_create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &game_id,
+            &Platform::Lichess,
+        ),
+        Err(Ok(Error::InvalidGameId))
+    );
+}
+
+#[test]
+fn test_create_match_game_id_with_space_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    // Space (0x20) — must be rejected
+    assert_eq!(
+        client.try_create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &String::from_str(&env, "game id"),
+            &Platform::Lichess,
+        ),
+        Err(Ok(Error::InvalidGameId))
+    );
+}
+
+#[test]
+fn test_create_match_game_id_with_non_ascii_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    // High byte 0x80 — must be rejected
+    let game_id = String::from_bytes(&env, &[b'g', b'a', b'm', b'e', 0x80]);
+    assert_eq!(
+        client.try_create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &game_id,
+            &Platform::Lichess,
+        ),
+        Err(Ok(Error::InvalidGameId))
+    );
+}
+
+#[test]
+fn test_create_match_game_id_with_dot_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    // Dot (.) is not in the allowed set
+    assert_eq!(
+        client.try_create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &String::from_str(&env, "game.id"),
+            &Platform::Lichess,
+        ),
+        Err(Ok(Error::InvalidGameId))
+    );
+}
+
+
     let (env, contract_id, _oracle, player1, player2, _token, admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -3081,9 +3209,82 @@ mod proptest_state_machine {
     }
 }
 
+// ============================================================================
+// #1031 — get_token view function
+// ============================================================================
+
+#[test]
+fn test_get_token_returns_initialized_token() {
+    let (env, contract_id, _oracle, player1, _player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let returned = client.get_token();
+    assert_eq!(returned, token, "get_token should return the token set during initialize");
+}
 
 // ============================================================================
-// FUZZ TESTING MODULE — Property-Based Tests for create_match Input Validation
+// #1032 — activated_ledger Option<u32> semantics
+// ============================================================================
+
+#[test]
+fn test_activated_ledger_none_before_both_deposits() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_opt_test"),
+        &Platform::Lichess,
+    );
+
+    // Before any deposit activated_ledger must be None
+    let m = client.get_match(&id);
+    assert_eq!(
+        m.activated_ledger, None,
+        "activated_ledger should be None before the match becomes Active"
+    );
+
+    // After only the first deposit it must still be None
+    client.deposit(&id, &player1);
+    let m = client.get_match(&id);
+    assert_eq!(
+        m.activated_ledger, None,
+        "activated_ledger should remain None after just one deposit"
+    );
+}
+
+#[test]
+fn test_activated_ledger_some_after_both_deposits() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_opt_activated"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    let m = client.get_match(&id);
+    assert!(
+        m.activated_ledger.is_some(),
+        "activated_ledger should be Some after both players deposit"
+    );
+    assert_eq!(
+        m.activated_ledger.unwrap(),
+        env.ledger().sequence(),
+        "activated_ledger should record the current ledger sequence"
+    );
+}
+
+
 // ============================================================================
 //
 // This module uses proptest to generate random inputs and verify that

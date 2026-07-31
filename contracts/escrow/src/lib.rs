@@ -181,6 +181,29 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Validate that every byte of `game_id` belongs to the set `[A-Za-z0-9_-]`.
+    ///
+    /// This enforces printable ASCII and prevents null bytes, control characters,
+    /// whitespace, and non-ASCII sequences from entering persistent storage.
+    /// The allowed set mirrors the identifier format used by Lichess and Chess.com.
+    ///
+    /// The string is copied into a fixed 64-byte stack buffer — the same size as
+    /// `MAX_GAME_ID_LEN` — so no heap allocation is required inside the WASM guest.
+    fn is_valid_game_id(game_id: &soroban_sdk::String) -> bool {
+        let len = game_id.len() as usize;
+        // Safety: len is already validated to be in [1, MAX_GAME_ID_LEN].
+        let mut buf = [0u8; MAX_GAME_ID_LEN as usize];
+        game_id.copy_into_slice(&mut buf[..len]);
+        for i in 0..len {
+            let b = buf[i];
+            let ok = b.is_ascii_alphanumeric() || b == b'_' || b == b'-';
+            if !ok {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Pre-flight check that the contract retains at least
     /// [`ESCROW_RESERVE_BUFFER_STROOPS`] of `token` **after** a total payout of
     /// `payout_total` is subtracted.
@@ -390,6 +413,14 @@ impl EscrowContract {
         if game_id_len == 0 || game_id_len > MAX_GAME_ID_LEN {
             return Err(Error::InvalidGameId);
         }
+        // Enforce printable ASCII: only [A-Za-z0-9_-] are accepted.
+        // This closes the gap where a caller could submit a game_id containing
+        // null bytes, control characters, or non-ASCII sequences that would
+        // match the length check but silently diverge from the platform API
+        // lookup key used by the oracle.
+        if !Self::is_valid_game_id(&game_id) {
+            return Err(Error::InvalidGameId);
+        }
         if env
             .storage()
             .persistent()
@@ -429,7 +460,7 @@ impl EscrowContract {
             player1_deposited: false,
             player2_deposited: false,
             created_ledger: env.ledger().sequence(),
-            activated_ledger: 0,
+            activated_ledger: None,
             pending_result_ledger: 0,
             pending_winner: OptionalWinner::None,
             cancelled_ledger: None,
@@ -544,7 +575,7 @@ impl EscrowContract {
             // STATE TRANSITION: Pending → Active
             // Record the ledger at which the match became active for timeout tracking.
             m.state = MatchState::Active;
-            m.activated_ledger = env.ledger().sequence();
+            m.activated_ledger = Some(env.ledger().sequence());
             env.events().publish(
                 (Symbol::new(&env, "match"), symbol_short!("activated")),
                 match_id,
@@ -834,6 +865,7 @@ impl EscrowContract {
             return Err(Error::Unauthorized);
         }
 
+        let activated = m.activated_ledger.ok_or(Error::InvalidState)?;
         let current = env.ledger().sequence();
         let timeout = Self::get_timeout_ledgers(env.clone());
         if current <= m.activated_ledger + timeout {
@@ -1007,6 +1039,21 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .get(&DataKey::GameId(game_id))
+    }
+
+    /// Return the token address this contract was initialized with.
+    ///
+    /// Allows frontends and integrators to verify which SEP-41 token a deployed
+    /// contract accepts without parsing raw WASM storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Unauthorized`] if the contract has not been initialized yet.
+    pub fn get_token(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Token)
+            .ok_or(Error::Unauthorized)
     }
 
     /// Read a match by ID.
