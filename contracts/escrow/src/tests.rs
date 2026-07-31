@@ -1895,6 +1895,37 @@ fn test_pause_blocks_deposit() {
     assert!(!client.is_funded(&id));
 }
 
+// Issue: Cancellation is allowed while the contract is paused so players can recover funds.
+// This test verifies the comment at line 790 does not regress due to future pause-check changes.
+#[test]
+fn test_cancel_match_allowed_while_paused() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "pause_cancel"),
+        &Platform::Lichess,
+    );
+
+    // Pause the contract
+    client.pause();
+    assert!(client.is_paused());
+
+    // Verify that cancel_match succeeds despite the contract being paused
+    // This allows players to recover funds in an emergency.
+    client.cancel_match(&id, &player1);
+
+    // Verify the match is cancelled and funds are refunded
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+    assert_eq!(token_client.balance(&player1), 1000);
+    assert_eq!(client.get_escrow_balance(&id), 0);
+}
+
 // Issue #72: submit_result on already Cancelled match should return InvalidState
 #[test]
 fn test_submit_result_on_cancelled_match_fails() {
