@@ -90,6 +90,9 @@ impl OracleContract {
             return Err(Error::AlreadyInitialized);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage()
+            .instance()
+            .extend_ttl(MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
         env.events()
             .publish((Symbol::new(&env, "oracle"), symbol_short!("init")), admin);
         Ok(())
@@ -231,6 +234,9 @@ impl OracleContract {
         admin.require_auth();
 
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.storage()
+            .instance()
+            .extend_ttl(MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
 
         env.events().publish(
             (Symbol::new(&env, "oracle"), symbol_short!("adm_xfer")),
@@ -255,6 +261,7 @@ impl OracleContract {
     /// # Errors
     ///
     /// * [`Error::Unauthorized`]   — Contract not yet initialized or caller ≠ admin.
+    /// * [`Error::InvalidAmount`]   — `amount` is zero or negative.
     /// * [`Error::TransferFailed`] — The token transfer was rejected.
     pub fn withdraw(
         env: Env,
@@ -272,6 +279,10 @@ impl OracleContract {
             return Err(Error::Unauthorized);
         }
         caller.require_auth();
+
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
 
         // SAFETY: token::Client::try_transfer is a cross-contract call. Soroban's
         // single-execution model ensures no re-entrancy is possible: the token
@@ -523,6 +534,26 @@ mod tests {
     }
 
     #[test]
+    fn test_transfer_admin_extends_instance_ttl() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+        let new_admin = Address::generate(&env);
+
+        // Get TTL before transfer
+        let ttl_before = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+
+        // Transfer admin
+        client.transfer_admin(&new_admin);
+
+        // Get TTL after transfer — should be extended
+        let ttl_after = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+        assert!(
+            ttl_after >= crate::MATCH_TTL_LEDGERS,
+            "Instance TTL must be extended after transfer_admin"
+        );
+    }
+
+    #[test]
     fn test_non_admin_cannot_transfer_admin() {
         let env = Env::default();
         let admin = Address::generate(&env);
@@ -572,6 +603,28 @@ mod tests {
     }
 
     #[test]
+    fn test_withdraw_zero_amount_returns_invalid_amount() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(OracleContract, ());
+        let client = OracleContractClient::new(&env, &contract_id);
+        client.initialize(&admin);
+
+        let token = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        assert_eq!(
+            client.try_withdraw(&token, &0i128, &recipient, &admin),
+            Err(Ok(Error::InvalidAmount))
+        );
+        assert_eq!(
+            client.try_withdraw(&token, &(-1i128), &recipient, &admin),
+            Err(Ok(Error::InvalidAmount))
+        );
+    }
+
+    #[test]
     fn test_initialize_emits_event() {
         let env = Env::default();
         env.mock_all_auths();
@@ -588,6 +641,23 @@ mod tests {
         ];
         let matched = events.iter().find(|(_, t, _)| *t == topics);
         assert!(matched.is_some());
+    }
+
+    #[test]
+    fn test_initialize_extends_instance_ttl() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(OracleContract, ());
+        let client = OracleContractClient::new(&env, &contract_id);
+        client.initialize(&admin);
+
+        // Verify that the instance storage TTL was extended
+        let instance_ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+        assert!(
+            instance_ttl >= crate::MATCH_TTL_LEDGERS,
+            "Instance TTL must be at least MATCH_TTL_LEDGERS"
+        );
     }
 
     #[test]
