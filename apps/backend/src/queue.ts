@@ -1,55 +1,26 @@
 /**
  * Dead-letter queue (DLQ) for failed oracle submissions.
  *
- * Failed submissions are persisted durably using a PersistentQueueStore.
- * A retry worker periodically attempts to reprocess each entry and emits
- * `oracle_dlq_depth` for monitoring.
+ * Failed submissions are stored in memory (file-based persistence can be added
+ * by swapping the store). A retry worker periodically attempts to reprocess
+ * each entry and emits `oracle_dlq_depth` for monitoring.
  *
- * Store selection:
- * - QUEUE_STORE=mongodb (default if MONGODB_URL is set) → MongoDBQueueStore
- * - QUEUE_STORE=sqlite (default if MONGODB_URL is not set) → SQLiteQueueStore
- * - QUEUE_STORE=memory (development only) → InMemoryQueueStore
- */
-
-import logger from './logger.js';
-import type { DlqEntry, PersistentQueueStore } from './store/persistent-queue-store.js';
-import { InMemoryQueueStore } from './store/in-memory-queue-store.js';
-import { MongoDBQueueStore } from './store/mongodb-queue-store.js';
-import { SQLiteQueueStore } from './store/sqlite-queue-store.js';
-
-export type { DlqEntry };
-
-let queueStore: PersistentQueueStore | null = null;
-let retryInterval: NodeJS.Timeout | null = null;
-
-/**
- * Initialize the queue store on application startup.
- * Must be called once before using the queue.
+ * Circuit breaker pattern protects against cascading RPC failures:
+ * - After N consecutive failures, job processing is paused
+ * - Backoff cooldown prevents hammering a degraded endpoint
+ * - Automatic recovery testing after cooldown expires
  */
 export async function initializeQueue(): Promise<void> {
   const storeType = process.env.QUEUE_STORE || 'auto';
 
-  // Auto-select store based on environment
-  if (storeType === 'auto') {
-    if (process.env.MONGODB_URL) {
-      queueStore = new MongoDBQueueStore();
-      logger.info('Initializing MongoDB queue store');
-    } else {
-      queueStore = new SQLiteQueueStore();
-      logger.info('Initializing SQLite queue store');
-    }
-  } else if (storeType === 'mongodb') {
-    queueStore = new MongoDBQueueStore();
-    logger.info('Initializing MongoDB queue store (explicit)');
-  } else if (storeType === 'sqlite') {
-    queueStore = new SQLiteQueueStore();
-    logger.info('Initializing SQLite queue store (explicit)');
-  } else if (storeType === 'memory') {
-    queueStore = new InMemoryQueueStore();
-    logger.warn('Using in-memory queue store. Data will be lost on restart!');
-  } else {
-    throw new Error(`Invalid QUEUE_STORE value: ${storeType}`);
-  }
+import { getCircuitBreaker, CircuitState } from './services/circuit-breaker.js';
+
+// Simple console-based logger (replaces dependency on external logger)
+const logger = {
+  info: (msg: string | object, context?: string) => console.log(`[INFO] ${context || 'queue'}:`, msg),
+  warn: (msg: string | object, context?: string) => console.warn(`[WARN] ${context || 'queue'}:`, msg),
+  error: (msg: string | object, context?: string) => console.error(`[ERROR] ${context || 'queue'}:`, msg),
+};
 
   await queueStore.initialize();
   logger.info('Queue store initialized');
@@ -117,38 +88,89 @@ export type RetryHandler = (entry: DlqEntry) => Promise<void>;
 /**
  * Retry worker — call once on startup.
  * Returns a cleanup function that clears the interval.
+ * 
+ * Implements circuit breaker to prevent cascading failures:
+ * - Circuit opens after N consecutive RPC failures
+ * - Job processing pauses during cooldown
+ * - Exponential backoff for recovery attempts
  */
 export function startRetryWorker(
   handler: RetryHandler,
   intervalMs = 60_000
 ): () => void {
-  retryInterval = setInterval(async () => {
-    try {
-      const entries = await listDlqEntries();
-      if (entries.length === 0) return;
+  const breaker = getCircuitBreaker();
 
-      logger.info({ count: entries.length }, 'oracle_dlq: retry worker running');
+  // Monitor circuit state changes
+  const originalOnStateChange = breaker['config'].onStateChange;
+  breaker['config'].onStateChange = (from: CircuitState, to: CircuitState) => {
+    if (from !== to) {
+      logger.warn(
+        { from, to, ...breaker.getStatus() },
+        'circuit_breaker: state changed'
+      );
+    }
+    originalOnStateChange?.(from, to);
+  };
 
-      for (const entry of entries) {
-        entry.attempts += 1;
-        entry.lastAttemptAt = Date.now();
+  const timer = setInterval(async () => {
+    const entries = listDlqEntries();
+    if (entries.length === 0) return;
 
-        try {
-          await handler(entry);
-          await removeDlqEntry(entry.id);
-          logger.info({ dlqId: entry.id }, 'oracle_dlq: entry resolved');
-        } catch (err) {
-          // Update entry with new attempt count before logging
-          await updateDlqEntry(entry.id, {
-            attempts: entry.attempts,
-            lastAttemptAt: entry.lastAttemptAt,
-          });
+    // Check if circuit allows processing
+    if (!breaker.allowRequest()) {
+      const remaining = breaker.getRemainingCooldown();
+      logger.warn(
+        { remaining, state: breaker.getState(), count: entries.length },
+        'circuit_breaker: job processing paused'
+      );
+      return;
+    }
 
-          logger.warn(
-            { dlqId: entry.id, attempt: entry.attempts, err },
-            'oracle_dlq: retry failed'
-          );
+    logger.info(
+      { count: entries.length, state: breaker.getState() },
+      "oracle_dlq: retry worker running"
+    );
+
+    let failureInThisCycle = false;
+
+    for (const entry of entries) {
+      entry.attempts += 1;
+      entry.lastAttemptAt = Date.now();
+      try {
+        await handler(entry);
+        removeDlqEntry(entry.id);
+        breaker.recordSuccess();
+        logger.info({ dlqId: entry.id }, "oracle_dlq: entry resolved");
+      } catch (err) {
+        failureInThisCycle = true;
+        const isRpcError = String(err).includes('RPC') || String(err).includes('Network');
+        
+        if (isRpcError) {
+          const circuitOpened = breaker.recordFailure();
+          if (circuitOpened) {
+            logger.error(
+              {
+                dlqId: entry.id,
+                attempt: entry.attempts,
+                failureCount: breaker.getFailureCount(),
+                cooldown: breaker.getRemainingCooldown(),
+              },
+              'circuit_breaker: RPC circuit opened, pausing job processing'
+            );
+            // Don't continue processing on circuit open
+            break;
+          }
         }
+
+        logger.warn(
+          {
+            dlqId: entry.id,
+            attempt: entry.attempts,
+            isRpcError,
+            err: String(err).substring(0, 100),
+          },
+          "oracle_dlq: retry failed"
+        );
       }
 
       await emitDlqDepth();

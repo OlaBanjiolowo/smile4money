@@ -793,6 +793,8 @@ pub enum Error {
     ResultNotFound     = 3, // No result submitted for this match_id
     AlreadyInitialized = 4, // Contract already initialized
     InvalidGameId      = 5, // game_id is empty or exceeds 64 bytes
+    TransferFailed     = 6, // Token transfer failed
+    InvalidAmount      = 7, // withdraw amount must be > 0
 }
 ```
 
