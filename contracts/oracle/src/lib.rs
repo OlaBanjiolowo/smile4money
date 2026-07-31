@@ -250,6 +250,7 @@ impl OracleContract {
     /// # Errors
     ///
     /// * [`Error::Unauthorized`]   — Contract not yet initialized or caller ≠ admin.
+    /// * [`Error::InvalidAmount`]   — `amount` is zero or negative.
     /// * [`Error::TransferFailed`] — The token transfer was rejected.
     pub fn withdraw(
         env: Env,
@@ -267,6 +268,10 @@ impl OracleContract {
             return Err(Error::Unauthorized);
         }
         caller.require_auth();
+
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
 
         // SAFETY: token::Client::try_transfer is a cross-contract call. Soroban's
         // single-execution model ensures no re-entrancy is possible: the token
@@ -564,6 +569,28 @@ mod tests {
 
         // Auth failure from require_auth() surfaces as a host error (Err variant).
         assert!(client.try_transfer_admin(&new_admin).is_err());
+    }
+
+    #[test]
+    fn test_withdraw_zero_amount_returns_invalid_amount() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(OracleContract, ());
+        let client = OracleContractClient::new(&env, &contract_id);
+        client.initialize(&admin);
+
+        let token = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        assert_eq!(
+            client.try_withdraw(&token, &0i128, &recipient, &admin),
+            Err(Ok(Error::InvalidAmount))
+        );
+        assert_eq!(
+            client.try_withdraw(&token, &(-1i128), &recipient, &admin),
+            Err(Ok(Error::InvalidAmount))
+        );
     }
 
     #[test]

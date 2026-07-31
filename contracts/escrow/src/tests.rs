@@ -30,7 +30,7 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address, Addres
 
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.initialize(&oracle, &admin, &token_addr, &safe_address);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address, &None, &None);
 
     // Fund the contract with the required reserve buffer.
     // `ensure_reserve_for_payout` requires the post-payout balance to stay
@@ -449,7 +449,7 @@ fn test_cancel_with_both_deposits_requires_both_auth() {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
     let safe_address = Address::generate(&env);
-    client.initialize(&oracle, &admin, &token_addr, &safe_address);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address, &None, &None);
 
     // Fund reserve buffer (matches setup() helper — see ensure_reserve_for_payout)
     asset_client.mint(&contract_id, &crate::ESCROW_RESERVE_BUFFER_STROOPS);
@@ -755,8 +755,8 @@ fn test_double_initialize_fails() {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
     let safe_address = Address::generate(&env);
-    client.initialize(&oracle, &admin, &token_addr, &safe_address);
-    client.initialize(&oracle, &admin, &token_addr, &safe_address);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address, &None, &None);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address, &None, &None);
 }
 
 #[test]
@@ -790,6 +790,54 @@ fn test_create_match_self_match_fails() {
             &Platform::Lichess,
         ),
         Err(Ok(Error::InvalidPlayers))
+    );
+}
+
+#[test]
+fn test_create_match_player1_zero_address_fails() {
+    let (env, contract_id, _oracle, _player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create a zero address (burn address)
+    let zero_address = Address::from_string(&String::from_str(
+        &env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    ));
+
+    assert_eq!(
+        client.try_create_match(
+            &zero_address,
+            &player2,
+            &100,
+            &token,
+            &String::from_str(&env, "zero_p1"),
+            &Platform::Lichess,
+        ),
+        Err(Ok(Error::InvalidAddress))
+    );
+}
+
+#[test]
+fn test_create_match_player2_zero_address_fails() {
+    let (env, contract_id, _oracle, player1, _player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create a zero address (burn address)
+    let zero_address = Address::from_string(&String::from_str(
+        &env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    ));
+
+    assert_eq!(
+        client.try_create_match(
+            &player1,
+            &zero_address,
+            &100,
+            &token,
+            &String::from_str(&env, "zero_p2"),
+            &Platform::Lichess,
+        ),
+        Err(Ok(Error::InvalidAddress))
     );
 }
 
@@ -1053,6 +1101,22 @@ fn test_update_oracle() {
 }
 
 #[test]
+fn test_transfer_admin_rejects_zero_address() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let zero_admin: Address = TryFromVal::try_from_val(
+        &env,
+        &String::from_str(
+            &env,
+            "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(client.try_transfer_admin(&admin, &zero_admin), Err(Ok(Error::InvalidAdmin)));
+}
+
+#[test]
 fn test_pause_blocks_all_state_changing_operations() {
     let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -1272,7 +1336,7 @@ fn test_non_admin_cannot_update_oracle() {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
     let safe_address = Address::generate(&env);
-    client.initialize(&oracle, &admin, &token_addr, &safe_address);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address, &None, &None);
 
     use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
     env.mock_auths(&[MockAuth {
@@ -1461,6 +1525,56 @@ fn test_deposit_event_player_label() {
 }
 
 #[test]
+fn test_half_funded_event_on_first_deposit() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "half_funded_ev"),
+        &Platform::Lichess,
+    );
+
+    // First deposit should emit a half_funded event
+    client.deposit(&id, &player1);
+
+    let events = env.events().all();
+    let half_funded_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        soroban_sdk::symbol_short!("half_fun").into_val(&env),
+    ];
+    let matched = events.iter().find(|(_, t, _)| *t == half_funded_topics);
+    assert!(
+        matched.is_some(),
+        "half_funded event should be emitted on first deposit"
+    );
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_id, ev_player_label, ev_stake): (u64, Symbol, i128) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_id, id);
+    assert_eq!(ev_player_label, symbol_short!("player1"));
+    assert_eq!(ev_stake, 100);
+
+    // Second deposit should NOT emit another half_funded event
+    client.deposit(&id, &player2);
+
+    let events_after_second = env.events().all();
+    let half_funded_count = events_after_second
+        .iter()
+        .filter(|(_, t, _)| *t == half_funded_topics)
+        .count();
+    assert_eq!(
+        half_funded_count, 1,
+        "half_funded event should only be emitted once"
+    );
+}
+
+#[test]
 fn test_submit_result_emits_event() {
     let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -1616,7 +1730,7 @@ fn test_non_admin_cannot_call_admin_functions() {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
     let safe_address = Address::generate(&env);
-    client.initialize(&oracle, &admin, &token_addr, &safe_address);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address, &None, &None);
 
     use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
 
@@ -2207,7 +2321,7 @@ fn test_deposit_insufficient_allowance() {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
     let safe_address = Address::generate(&env);
-    client.initialize(&oracle, &admin, &token_addr, &safe_address);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address, &None, &None);
 
     let id = client.create_match(
         &player1,
@@ -2400,10 +2514,241 @@ fn test_instance_ttl_extended_on_initialize() {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
     let safe_address = Address::generate(&env);
-    client.initialize(&oracle, &admin, &token_addr, &safe_address);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address, &None, &None);
 
     let instance_ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
     assert!(instance_ttl >= crate::INSTANCE_LIFETIME_THRESHOLD);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Pagination Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_list_matches_empty_contract() {
+    let (env, contract_id, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.list_matches(&0, &50);
+    assert_eq!(result.len(), 0, "empty contract should return empty result");
+}
+
+#[test]
+fn test_list_matches_basic() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create 5 matches
+    for i in 0..5 {
+        let game_id = String::from_str(&env, &format!("game_{}", i));
+        client.create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &game_id,
+            &Platform::Lichess,
+        );
+    }
+
+    let result = client.list_matches(&0, &50);
+    assert_eq!(result.len(), 5, "should return all 5 match IDs");
+    assert_eq!(result.get(0), 0);
+    assert_eq!(result.get(1), 1);
+    assert_eq!(result.get(2), 2);
+    assert_eq!(result.get(3), 3);
+    assert_eq!(result.get(4), 4);
+}
+
+#[test]
+fn test_list_matches_with_limit() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create 10 matches
+    for i in 0..10 {
+        let game_id = String::from_str(&env, &format!("game_limit_{}", i));
+        client.create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &game_id,
+            &Platform::Lichess,
+        );
+    }
+
+    // Request 5, should get 5
+    let result = client.list_matches(&0, &5);
+    assert_eq!(result.len(), 5, "should respect limit of 5");
+    assert_eq!(result.get(0), 0);
+    assert_eq!(result.get(4), 4);
+
+    // Request 5 starting at 5, should get remaining 5
+    let result = client.list_matches(&5, &5);
+    assert_eq!(result.len(), 5);
+    assert_eq!(result.get(0), 5);
+    assert_eq!(result.get(4), 9);
+}
+
+#[test]
+fn test_list_matches_offset() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create 5 matches
+    for i in 0..5 {
+        let game_id = String::from_str(&env, &format!("game_offset_{}", i));
+        client.create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &game_id,
+            &Platform::Lichess,
+        );
+    }
+
+    // Start from middle
+    let result = client.list_matches(&2, &50);
+    assert_eq!(result.len(), 3, "should return IDs 2, 3, 4");
+    assert_eq!(result.get(0), 2);
+    assert_eq!(result.get(1), 3);
+    assert_eq!(result.get(2), 4);
+}
+
+#[test]
+fn test_list_matches_after_empty() {
+    let (env, contract_id, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.list_matches_after(&u64::MAX, &50);
+    assert_eq!(
+        result.len(),
+        0,
+        "empty contract should return empty result for cursor pagination"
+    );
+}
+
+#[test]
+fn test_list_matches_after_basic() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create 5 matches
+    for i in 0..5 {
+        let game_id = String::from_str(&env, &format!("game_after_{}", i));
+        client.create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &game_id,
+            &Platform::Lichess,
+        );
+    }
+
+    // Start from beginning (u64::MAX acts as "before all")
+    let result = client.list_matches_after(&u64::MAX, &50);
+    assert_eq!(result.len(), 5, "cursor from MAX should return all matches");
+    assert_eq!(result.get(0), 0);
+    assert_eq!(result.get(4), 4);
+}
+
+#[test]
+fn test_list_matches_after_with_cursor() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create 10 matches
+    for i in 0..10 {
+        let game_id = String::from_str(&env, &format!("game_cursor_{}", i));
+        client.create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &game_id,
+            &Platform::Lichess,
+        );
+    }
+
+    // Get first page
+    let page1 = client.list_matches_after(&u64::MAX, &5);
+    assert_eq!(page1.len(), 5);
+    assert_eq!(page1.get(0), 0);
+    assert_eq!(page1.get(4), 4);
+
+    // Use last ID from page1 as cursor for page2
+    let cursor = page1.get(4); // ID 4
+    let page2 = client.list_matches_after(&cursor, &5);
+    assert_eq!(page2.len(), 5, "should return IDs 5-9");
+    assert_eq!(page2.get(0), 5);
+    assert_eq!(page2.get(4), 9);
+
+    // Next page should be empty (end of data)
+    let page3 = client.list_matches_after(&9, &5);
+    assert_eq!(page3.len(), 0, "should be empty at end of data");
+}
+
+#[test]
+fn test_list_matches_after_unambiguous_eof() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create matches with IDs 0, 1, 2
+    for i in 0..3 {
+        let game_id = String::from_str(&env, &format!("game_eof_{}", i));
+        client.create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &game_id,
+            &Platform::Lichess,
+        );
+    }
+
+    // Cursor at ID 2 (last match)
+    let result = client.list_matches_after(&2, &50);
+    assert_eq!(
+        result.len(),
+        0,
+        "cursor after last ID should return empty (unambiguous EOF)"
+    );
+
+    // Cursor at ID 100 (beyond all matches)
+    let result = client.list_matches_after(&100, &50);
+    assert_eq!(
+        result.len(),
+        0,
+        "cursor beyond all IDs should return empty (unambiguous EOF)"
+    );
+}
+
+#[test]
+fn test_list_matches_after_limit() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create 20 matches
+    for i in 0..20 {
+        let game_id = String::from_str(&env, &format!("game_limit_after_{}", i));
+        client.create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &game_id,
+            &Platform::Lichess,
+        );
+    }
+
+    // Request 10 starting after ID 5
+    let result = client.list_matches_after(&5, &10);
+    assert_eq!(result.len(), 10, "should return 10 IDs");
+    assert_eq!(result.get(0), 6, "should start after cursor");
+    assert_eq!(result.get(9), 15);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2453,7 +2798,7 @@ mod proptest_state_machine {
         let contract_id = env.register(EscrowContract, ());
         let client = EscrowContractClient::new(&env, &contract_id);
         let safe_address = Address::generate(&env);
-        client.initialize(&oracle, &admin, &token_addr, &safe_address);
+        client.initialize(&oracle, &admin, &token_addr, &safe_address, &None, &None);
 
         let expiration = env.ledger().sequence() + 1_000_000;
         let token_client = TokenClient::new(&env, &token_addr);

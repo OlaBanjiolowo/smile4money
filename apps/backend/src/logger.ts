@@ -1,37 +1,56 @@
 /**
- * Simple structured logger for smile4money backend.
- * Can be replaced with a proper logging library (pino, winston, etc.)
+ * Simple JSON logger for structured logging.
+ * Outputs JSON to stdout for easy parsing and forwarding to logging services.
  */
+
+interface LogContext {
+  [key: string]: any;
+}
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-interface LogEntry {
-  level: LogLevel;
-  timestamp: string;
-  message: string;
-  data?: Record<string, unknown>;
-}
+class Logger {
+  private log(level: LogLevel, context: LogContext, message: string): void {
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      level,
+      message,
+      ...context,
+    };
+    console.log(JSON.stringify(logEntry));
+  }
 
-function log(level: LogLevel, data: unknown, message: string): void {
-  const entry: LogEntry = {
-    level,
-    timestamp: new Date().toISOString(),
-    message,
-    ...(typeof data === 'object' && data !== null ? { data } : {}),
-  };
+  debug(context: LogContext | string, message?: string): void {
+    if (typeof context === 'string') {
+      this.log('debug', {}, context);
+    } else {
+      this.log('debug', context, message || '');
+    }
+  }
 
-  const json = JSON.stringify(entry);
+  info(context: LogContext | string, message?: string): void {
+    if (typeof context === 'string') {
+      this.log('info', {}, context);
+    } else {
+      this.log('info', context, message || '');
+    }
+  }
 
-  if (level === 'error' || level === 'warn') {
-    console.error(json);
-  } else {
-    console.log(json);
+  warn(context: LogContext | string, message?: string): void {
+    if (typeof context === 'string') {
+      this.log('warn', {}, context);
+    } else {
+      this.log('warn', context, message || '');
+    }
+  }
+
+  error(context: LogContext | string, message?: string): void {
+    if (typeof context === 'string') {
+      this.log('error', {}, context);
+    } else {
+      this.log('error', context, message || '');
+    }
   }
 }
 
-export default {
-  debug: (data: unknown, message: string) => log('debug', data, message),
-  info: (data: unknown, message: string) => log('info', data, message),
-  warn: (data: unknown, message: string) => log('warn', data, message),
-  error: (data: unknown, message: string) => log('error', data, message),
-};
+export default new Logger();
