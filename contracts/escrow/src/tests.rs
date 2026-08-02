@@ -2650,6 +2650,55 @@ fn test_create_match_stake_too_high_fails() {
     );
 }
 
+#[test]
+fn test_create_match_max_stake() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &crate::MAX_STAKE,
+        &token,
+        &String::from_str(&env, "max_stake"),
+        &Platform::Lichess,
+    );
+    let m = client.get_match(&id);
+    assert_eq!(m.stake_amount, crate::MAX_STAKE);
+}
+
+#[test]
+fn test_finalize_result_dispute_window_boundary() {
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "boundary_test"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    client.submit_result(
+        &id,
+        &String::from_str(&env, "boundary_test"),
+        &Winner::Player1,
+        &oracle,
+    );
+
+    let m = client.get_match(&id);
+    // advance the ledger to exactly the boundary
+    env.ledger().set_sequence_number(m.pending_result_ledger + crate::DISPUTE_WINDOW_LEDGERS);
+
+    assert_eq!(
+        client.try_finalize_result(&id),
+        Err(Ok(Error::DisputeWindowActive))
+    );
+}
+
 // Issue #791: stake amount below MIN_STAKE (e.g. zero) is rejected as StakeTooLow
 #[test]
 fn test_create_match_stake_below_min_fails() {

@@ -353,6 +353,9 @@ impl EscrowContract {
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
+        if Self::is_paused(env.clone()) {
+            return Ok(());
+        }
         env.storage().instance().set(&DataKey::Paused, &true);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("paused")),
@@ -369,6 +372,9 @@ impl EscrowContract {
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
+        if !Self::is_paused(env.clone()) {
+            return Ok(());
+        }
         env.storage().instance().set(&DataKey::Paused, &false);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("unpaused")),
@@ -729,6 +735,9 @@ impl EscrowContract {
         }
 
         let old_winner = m.pending_winner.clone();
+        if old_winner == OptionalWinner::Some(new_winner.clone()) {
+            return Ok(());
+        }
         m.pending_winner = OptionalWinner::Some(new_winner.clone());
 
         env.storage()
