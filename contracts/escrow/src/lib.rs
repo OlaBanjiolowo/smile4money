@@ -174,6 +174,15 @@ impl EscrowContract {
             .unwrap_or(0)
     }
 
+    /// Return the total number of matches ever created.
+    ///
+    /// Exposed as a public read-only view so that frontends and off-chain tooling
+    /// can efficiently query the total match count for pagination and progress
+    /// displays without needing to enumerate via `list_matches`.
+    pub fn match_count(env: Env) -> u64 {
+        Self::get_match_count(&env)
+    }
+
     fn validate_match_id(env: &Env, match_id: u64) -> Result<(), Error> {
         if match_id >= Self::get_match_count(env) {
             return Err(Error::MatchNotFound);
@@ -455,6 +464,11 @@ impl EscrowContract {
             return Err(Error::AlreadyExists);
         }
 
+        // Capture the event values *before* the locals are moved into the Match struct.
+        let event_player1 = player1.clone();
+        let event_player2 = player2.clone();
+        let event_game_id = game_id.clone();
+
         let m = Match {
             id,
             player1,
@@ -494,7 +508,7 @@ impl EscrowContract {
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("created")),
-            (id, m.player1, m.player2, stake_amount, m.game_id),
+            (id, event_player1, event_player2, stake_amount, event_game_id),
         );
 
         Ok(id)
@@ -507,8 +521,6 @@ impl EscrowContract {
         if Self::is_paused(&env) {
             return Err(Error::ContractPaused);
         }
-
-        Self::validate_match_id(&env, match_id)?;
 
         let mut m: Match = env
             .storage()
