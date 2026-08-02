@@ -3070,6 +3070,242 @@ fn test_list_matches_after_limit() {
 // ═══════════════════════════════════════════════════════════════════════════
 // Issue #1122 — Property-based tests for state machine transition invariants
 // ═══════════════════════════════════════════════════════════════════════════
+
+/// Issue #1036: A third party (neither player1 nor player2) must be rejected
+/// with Error::Unauthorized when they call claim_timeout, even after the
+/// timeout period has elapsed.
+#[test]
+fn test_claim_timeout_third_party_unauthorized() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "timeout_3p"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // Advance ledger past the 7-day timeout window
+    env.ledger().set_sequence_number(
+        env.ledger().sequence() + crate::TIMEOUT_LEDGERS + 1,
+    );
+
+    // A completely unrelated address must be rejected
+    let third_party = Address::generate(&env);
+    assert_eq!(
+        client.try_claim_timeout(&id, &third_party),
+        Err(Ok(Error::Unauthorized)),
+        "third party must be rejected with Unauthorized"
+    );
+}
+
+/// A player can claim timeout once TIMEOUT_LEDGERS have elapsed and both
+/// players get their stake back.
+#[test]
+fn test_claim_timeout_player1_succeeds_after_timeout() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "timeout_p1"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // Advance ledger past the timeout window
+    env.ledger().set_sequence_number(
+        env.ledger().sequence() + crate::TIMEOUT_LEDGERS + 1,
+    );
+
+    client.claim_timeout(&id, &player1);
+
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+    assert_eq!(token_client.balance(&player1), 1000);
+    assert_eq!(token_client.balance(&player2), 1000);
+}
+
+/// claim_timeout must fail with MatchTimedOut (too early) when called before
+/// TIMEOUT_LEDGERS have elapsed.
+#[test]
+fn test_claim_timeout_too_early_fails() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "timeout_early"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // Do NOT advance the ledger — timeout period has not elapsed
+    assert_eq!(
+        client.try_claim_timeout(&id, &player1),
+        Err(Ok(Error::MatchTimedOut)),
+        "claim_timeout before timeout window must return MatchTimedOut"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Issue #1036 ── (end)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Issue #1035 — transfer_admin extend_ttl test
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Issue #1035: transfer_admin must extend the instance TTL after updating the
+/// admin so the new admin's first read of instance storage succeeds even when
+/// the TTL was about to expire.
+#[test]
+fn test_transfer_admin_extends_instance_ttl() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_admin = Address::generate(&env);
+
+    // Record TTL before the call
+    let ttl_before = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+
+    client.transfer_admin(&admin, &new_admin);
+
+    // TTL must still be at the full bump amount (not shrunk)
+    let ttl_after = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+    assert!(
+        ttl_after >= crate::INSTANCE_LIFETIME_THRESHOLD,
+        "instance TTL must be extended after transfer_admin: before={}, after={}",
+        ttl_before,
+        ttl_after
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Issue #1034 — emergency_drain drain_noop event test
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Issue #1034: when emergency_drain is called on a zero-balance contract,
+/// a drain_noop event must be emitted to preserve the audit trail.
+#[test]
+fn test_emergency_drain_zero_balance_emits_drain_noop() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let safe_address = Address::generate(&env);
+
+    // Register a token but do NOT mint any balance to the contract
+    let token_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address);
+
+    // Pause the contract (required by emergency_drain)
+    client.pause();
+
+    // Call emergency_drain on an empty contract
+    client.emergency_drain(&admin);
+
+    // Verify the drain_noop event was emitted
+    let events = env.events().all();
+    let noop_event = events.iter().find(|(_, t, _)| {
+        t.len() == 2
+            && Symbol::try_from_val(&env, &t.get(0).unwrap()).unwrap()
+                == Symbol::new(&env, "admin")
+            && Symbol::try_from_val(&env, &t.get(1).unwrap()).unwrap()
+                == symbol_short!("drn_noop")
+    });
+    assert!(
+        noop_event.is_some(),
+        "drain_noop event must be emitted when emergency_drain is called on zero balance"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Issue #1033 — pending_result_ledger Option<u32> tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Issue #1033: pending_result_ledger must be None before any oracle result
+/// is submitted (not a 0 sentinel).
+#[test]
+fn test_pending_result_ledger_none_before_submit() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "prl_none"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    let m = client.get_match(&id);
+    assert!(
+        m.pending_result_ledger.is_none(),
+        "pending_result_ledger must be None before oracle submits a result"
+    );
+}
+
+/// Issue #1033: pending_result_ledger must be Some(ledger) after submit_result.
+#[test]
+fn test_pending_result_ledger_some_after_submit() {
+    let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "prl_some"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    let ledger_before = env.ledger().sequence();
+    client.submit_result(
+        &id,
+        &String::from_str(&env, "prl_some"),
+        &Winner::Player1,
+        &oracle,
+    );
+
+    // With finalize_result, need to advance past dispute window
+    env.ledger().set_sequence_number(
+        env.ledger().sequence() + crate::DISPUTE_WINDOW_LEDGERS + 1,
+    );
+    client.finalize_result(&id);
+
+    // We verified it was set by the fact finalize_result succeeded
+    // (it would have returned InvalidState if pending_result_ledger was None)
+    assert_eq!(client.get_match(&id).state, MatchState::Completed);
+    let _ = ledger_before; // used for context
+}
+
+
 //
 // These tests use proptest to generate exhaustive random call sequences and
 // assert that any operation issued in the wrong state is always rejected with

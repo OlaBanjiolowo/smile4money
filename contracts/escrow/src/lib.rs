@@ -666,7 +666,7 @@ impl EscrowContract {
         // STATE TRANSITION: Active → PendingResult
         // The oracle's result enters a dispute window. No payout yet.
         m.state = MatchState::PendingResult;
-        m.pending_result_ledger = env.ledger().sequence();
+        m.pending_result_ledger = Some(env.ledger().sequence());
         m.pending_winner = OptionalWinner::Some(winner.clone());
 
         env.storage()
@@ -1038,13 +1038,19 @@ impl EscrowContract {
 
         if balance > 0 {
             client.transfer(&contract, &safe_address, &balance);
+            env.events().publish(
+                (Symbol::new(&env, "admin"), symbol_short!("drain")),
+                (balance, safe_address, admin),
+            );
+        } else {
+            // Preserve the audit trail even when there are no funds to drain.
+            // A silent success with no event would complicate post-mortems.
+            env.events().publish(
+                (Symbol::new(&env, "admin"), symbol_short!("drn_noop")),
+                (0i128, safe_address, admin),
+            );
         }
         Self::bump_instance_ttl(&env);
-
-        env.events().publish(
-            (Symbol::new(&env, "admin"), symbol_short!("drain")),
-            (balance, safe_address, admin),
-        );
 
         Ok(())
     }
