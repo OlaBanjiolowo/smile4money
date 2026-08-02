@@ -1,8 +1,13 @@
 import { Router } from 'express';
+import { RateLimitStore, createRateLimitMiddleware } from '../middleware/rate-limit.js';
 import { fetchLichessResult, GameNotFoundError } from '../fetchers/lichess.js';
 import { fetchChessDotComResult } from '../fetchers/chessdotcom.js';
 
 const router = Router();
+
+// Rate limiter: 100 requests per 60 seconds per IP
+const rateLimitStore = new RateLimitStore(100, 60 * 1000, 100);
+router.use(createRateLimitMiddleware(rateLimitStore));
 
 interface ValidateGameResponse {
   valid: boolean;
