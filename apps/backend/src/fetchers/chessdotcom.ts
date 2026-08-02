@@ -1,4 +1,6 @@
 import axios from 'axios';
+import { getChessDotComLimiterSingleton } from '../services/bottleneck-limiters.js';
+import logger from '../logger.js';
 import type { MatchResult, GameResult } from './lichess.js';
 
 export { GameNotFoundError } from './lichess.js';
@@ -33,13 +35,37 @@ function mapResult(white: string, black: string): MatchResult | null {
 async function fetchArchive(username: string, year: number, month: number): Promise<ChessDotComGame[]> {
   const mm = String(month).padStart(2, '0');
   const url = `https://api.chess.com/pub/player/${encodeURIComponent(username)}/games/${year}/${mm}`;
-  const response = await axios.get(url, {
-    timeout: 10_000,
-    validateStatus: (s) => s < 500,
+  const limiter = getChessDotComLimiterSingleton();
+
+  return limiter.schedule(async () => {
+    try {
+      const response = await axios.get(url, {
+        timeout: 10_000,
+        validateStatus: (s) => s < 500,
+      });
+
+      if (response.status === 404) {
+        return [];
+      }
+
+      if (response.status === 429) {
+        throw new Error('Chess.com API rate limit exceeded (429)');
+      }
+
+      if (response.status !== 200) {
+        throw new Error(`Chess.com API error: ${response.status}`);
+      }
+
+      return (response.data as { games: ChessDotComGame[] }).games ?? [];
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      logger.error(
+        { username, year, month, url, error: message },
+        'Chess.com API archive fetch failed'
+      );
+      throw error;
+    }
   });
-  if (response.status === 404) return [];
-  if (response.status !== 200) throw new Error(`Chess.com API error: ${response.status}`);
-  return (response.data as { games: ChessDotComGame[] }).games ?? [];
 }
 
 /**

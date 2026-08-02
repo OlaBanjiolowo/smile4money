@@ -200,4 +200,96 @@ describe('POST /api/matches', () => {
     expect(response.body.gameId).toBe('chess-game-1');
     expect(response.body.platform).toBe('chessdotcom');
   });
+
+  describe('JWT Authentication', () => {
+    it('returns 401 with error and message when no Authorization header', async () => {
+      const response = await request(app)
+        .post('/api/matches')
+        .send({});
+
+      expect(response.status).toBe(401);
+      expect(response.body.error).toBe('unauthorized');
+      expect(response.body.message).toBeDefined();
+    });
+
+    it('returns 401 with error and message when Authorization header is malformed', async () => {
+      const response = await request(app)
+        .post('/api/matches')
+        .set('Authorization', 'Bearer invalid.token.structure')
+        .send({});
+
+      expect(response.status).toBe(401);
+      expect(response.body.error).toBe('unauthorized');
+      expect(response.body.message).toBeDefined();
+    });
+
+    it('returns 401 with error and message when JWT has expired', async () => {
+      const expiredToken = jwt.sign(
+        { address: 'GPLAYER1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' },
+        secret,
+        { expiresIn: '-1h' }, // Expired 1 hour ago
+      );
+
+      const response = await request(app)
+        .post('/api/matches')
+        .set('Authorization', `Bearer ${expiredToken}`)
+        .send({});
+
+      expect(response.status).toBe(401);
+      expect(response.body.error).toBe('unauthorized');
+      expect(response.body.message).toContain('expired');
+    });
+
+    it('returns 401 with error and message when JWT token lacks address claim', async () => {
+      const badToken = jwt.sign({ user_id: '12345' }, secret, { expiresIn: '1h' });
+
+      const response = await request(app)
+        .post('/api/matches')
+        .set('Authorization', `Bearer ${badToken}`)
+        .send({});
+
+      expect(response.status).toBe(401);
+      expect(response.body.error).toBe('unauthorized');
+      expect(response.body.message).toContain('Invalid');
+    });
+
+    it('successfully authenticates with valid JWT token', async () => {
+      mockLichessGameFound('lichess-game-abc123');
+      const validToken = makeToken();
+
+      const response = await request(app)
+        .post('/api/matches')
+        .set('Authorization', `Bearer ${validToken}`)
+        .send({
+          player2: 'GPLAYER2BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+          stakeAmount: 100,
+          token: 'XLM',
+          gameId: 'lichess-game-abc123',
+          platform: 'lichess',
+        });
+
+      // Should not get 401, should proceed to validate request body
+      expect(response.status).not.toBe(401);
+    });
+
+    it('extracts address from JWT and uses it as player1', async () => {
+      mockLichessGameFound('lichess-game-xyz789');
+      const player1Address = 'GPLAYER1CUSTOM1111111111111111111111111111111111111111';
+      const token = jwt.sign({ address: player1Address }, secret, { expiresIn: '1h' });
+
+      const response = await request(app)
+        .post('/api/matches')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          player2: 'GPLAYER2BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+          stakeAmount: 100,
+          token: 'XLM',
+          gameId: 'lichess-game-xyz789',
+          platform: 'lichess',
+        });
+
+      expect(response.status).toBe(201);
+      expect(response.body.player1).toBe(player1Address);
+    });
+  });
 });

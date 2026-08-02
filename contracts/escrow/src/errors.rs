@@ -37,6 +37,7 @@ use soroban_sdk::contracterror;
 /// | 24   | StakeTooLow           | stake_amount is below the minimum allowed stake |
 /// | 25   | StakeTooHigh          | stake_amount exceeds the maximum allowed stake |
 /// | 26   | InsufficientReserve   | contract balance too low to cover payout + Stellar minimum reserve |
+/// | 27   | InvalidAddress        | a player address is invalid (zero address / burn address) |
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -129,4 +130,9 @@ pub enum Error {
     /// minimum account reserve after the payout. Top up the contract address with
     /// enough XLM (or configured token) to cover the 1.5 XLM reserve buffer, then retry.
     InsufficientReserve = 26,
+
+    /// [E027] One of the player addresses is invalid (e.g. zero address / burn address).
+    /// Players must be valid, controlled addresses. Matches created with zero addresses
+    /// would result in payout funds being sent to uncontrolled addresses.
+    InvalidAddress = 27,
 }
