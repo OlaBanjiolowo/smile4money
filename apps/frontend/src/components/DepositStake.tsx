@@ -148,9 +148,11 @@ export function DepositStake({
   const isCheckingAllowance = allowanceStatus === 'checking';
   const needsApproval = allowanceStatus === 'insufficient';
 
-  // Deposit button is disabled when: loading match data, player already deposited,
-  // allowance is still being checked, or allowance is insufficient
-  const isDisabled = isLoading || hasDeposited(matchDetails) || isCheckingAllowance || needsApproval;
+  // Deposit button is disabled when: loading match data, tx already in flight,
+  // player already deposited, allowance is still being checked, or allowance is
+  // insufficient. The isPending guard is the critical one — without it the user
+  // can click twice and submit duplicate transactions.
+  const isDisabled = isLoading || isPending || hasDeposited(matchDetails) || isCheckingAllowance || needsApproval;
 
   // Loading state
   if (isLoading && !matchDetails) {

@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { DepositStake } from '../src/components/DepositStake';
 
@@ -56,6 +56,58 @@ describe('DepositStake — deposit button states', () => {
     await waitFor(() => {
       expect(screen.getByTestId('deposit-btn')).toBeInTheDocument();
     });
+  });
+
+  /**
+   * #1080 — Regression guard for double-submit race condition.
+   *
+   * While an in-flight deposit transaction is pending the button must be:
+   *   - disabled (cannot be clicked again)
+   *   - aria-busy="true" (accessible loading indicator)
+   *   - showing the "Depositing…" label
+   *
+   * We use a never-resolving promise to freeze the component in the pending
+   * state so we can assert all three properties synchronously.
+   */
+  it('disables the button and shows a loading indicator while a deposit is in flight', async () => {
+    // onDeposit never resolves — keeps the component in the 'pending' state
+    // for as long as we need to make assertions.
+    let resolveDeposit!: () => void;
+    const inFlightDeposit = new Promise<void>((resolve) => {
+      resolveDeposit = resolve;
+    });
+    const onDeposit = vi.fn().mockReturnValue(inFlightDeposit);
+
+    render(
+      <DepositStake
+        matchId="123"
+        playerAddress="GABCDEF123456"
+        contractId="test-contract"
+        onDeposit={onDeposit}
+      />,
+    );
+
+    // Wait for match details to load so the deposit button is enabled
+    const depositBtn = await screen.findByTestId('deposit-btn');
+    expect(depositBtn).not.toBeDisabled();
+
+    // Trigger the deposit — this sets status to 'pending' synchronously
+    fireEvent.click(depositBtn);
+
+    // The button must be disabled while the transaction is in flight
+    expect(depositBtn).toBeDisabled();
+
+    // aria-busy must be true so screen readers announce the loading state
+    expect(depositBtn).toHaveAttribute('aria-busy', 'true');
+
+    // The label must communicate the in-progress state to sighted users
+    expect(depositBtn).toHaveTextContent('Depositing…');
+
+    // Confirm onDeposit was only called once — no double-submit
+    expect(onDeposit).toHaveBeenCalledTimes(1);
+
+    // Clean up: let the promise resolve so the component can unmount cleanly
+    resolveDeposit();
   });
 });
 
