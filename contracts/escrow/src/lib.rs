@@ -784,18 +784,18 @@ impl EscrowContract {
 
         let client = token::Client::new(&env, &m.token);
 
-        let payout_amount: i128 = match winner {
+        let payout_amount: i128 = match &winner {
             Winner::Draw => m.stake_amount,
             _ => m.stake_amount * 2,
         };
 
-        let total_payout = match winner {
+        let total_payout = match &winner {
             Winner::Draw => payout_amount * 2,
             _ => payout_amount,
         };
         Self::ensure_reserve_for_payout(&env, &m.token, total_payout)?;
 
-        match winner.clone() {
+        match &winner {
             Winner::Player1 => {
                 client.transfer(&env.current_contract_address(), &m.player1, &payout_amount)
             }
