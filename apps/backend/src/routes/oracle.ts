@@ -5,6 +5,7 @@ import { fetchLichessResult, GameNotFoundError } from '../fetchers/lichess.js';
 import { fetchChessDotComResult } from '../fetchers/chessdotcom.js';
 import { verifyPlayerIdentities } from '../services/player-identity.js';
 import type { PlayerIdentityMap } from '../services/player-identity.js';
+import logger from '../logger.js';
 
 const router = Router();
 const store = matchStore;
@@ -65,6 +66,35 @@ router.post('/submit-result', async (req, res) => {
     // Fetch the match record
     const match = await store.findByGameId(gameId);
     if (!match) {
+      const storeSize = await store.count();
+
+      if (storeSize === 0) {
+        // The store is empty — most likely the process restarted and the
+        // in-memory store lost all match records. This is a persistence
+        // configuration problem, not a bad request from the caller.
+        logger.error(
+          {
+            game_id: gameId,
+            match_id: matchId,
+            store_count: 0,
+          },
+          'oracle_match_not_found_empty_store',
+        );
+        return res.status(404).json({
+          error: 'Match not found',
+          details: `No match found for gameId: ${gameId}. The match store is empty — the server may have restarted and lost in-memory state. Check your persistence configuration (QUEUE_STORE env var) and ensure matches are written to a durable store before deploying.`,
+          hint: 'persistence_loss_suspected',
+        });
+      }
+
+      logger.warn(
+        {
+          game_id: gameId,
+          match_id: matchId,
+          store_count: storeSize,
+        },
+        'oracle_match_not_found',
+      );
       return res.status(404).json({
         error: 'Match not found',
         details: `No match found for gameId: ${gameId}`,
