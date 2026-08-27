@@ -98,7 +98,7 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: 'platform must be lichess or chessdotcom' });
   }
 
-  if (req.address === player2) {
+  if (req.address?.toUpperCase() === player2.toUpperCase()) {
     return res.status(400).json({ error: 'player1 and player2 must be different addresses' });
   }
 
