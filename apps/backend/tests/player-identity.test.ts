@@ -194,6 +194,97 @@ describe('Player Identity Verification', () => {
       const result = verifyPlayerIdentities(mockMatch, gameResult, identityMap);
       expect(result.valid).toBe(false);
     });
+
+    it('returns invalid when the registered player1 username is empty', () => {
+      // The API reports a real player, but the on-chain record registered an
+      // empty username for player1. An empty registered name must not match.
+      const gameResult: GameResult = {
+        gameId: 'abc123',
+        status: 'mate',
+        whitePlayer: 'alice',
+        blackPlayer: 'bob',
+        result: 'Player1Wins',
+      };
+
+      const identityMap = {
+        player1Address: 'GPLAYER1AAAA',
+        player1Username: '',
+        player2Address: 'GPLAYER2BBBB',
+        player2Username: 'bob',
+        platform: 'lichess',
+      };
+
+      const result = verifyPlayerIdentities(mockMatch, gameResult, identityMap);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('empty username');
+    });
+
+    it('returns invalid when the registered player2 username is empty', () => {
+      const gameResult: GameResult = {
+        gameId: 'abc123',
+        status: 'mate',
+        whitePlayer: 'alice',
+        blackPlayer: 'bob',
+        result: 'Player1Wins',
+      };
+
+      const identityMap = {
+        player1Address: 'GPLAYER1AAAA',
+        player1Username: 'alice',
+        player2Address: 'GPLAYER2BBBB',
+        player2Username: '',
+        platform: 'lichess',
+      };
+
+      const result = verifyPlayerIdentities(mockMatch, gameResult, identityMap);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('empty username');
+    });
+
+    it('returns invalid when both API and registered usernames are empty (no false positive)', () => {
+      // Edge case from the issue: empty API names matching empty registered
+      // names must NOT be treated as a valid identity match.
+      const gameResult: GameResult = {
+        gameId: 'abc123',
+        status: 'mate',
+        whitePlayer: '',
+        blackPlayer: '',
+        result: null,
+      };
+
+      const identityMap = {
+        player1Address: 'GPLAYER1AAAA',
+        player1Username: '',
+        player2Address: 'GPLAYER2BBBB',
+        player2Username: '',
+        platform: 'lichess',
+      };
+
+      const result = verifyPlayerIdentities(mockMatch, gameResult, identityMap);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('empty username');
+    });
+
+    it('returns invalid when only one of the API usernames is empty', () => {
+      const gameResult: GameResult = {
+        gameId: 'abc123',
+        status: 'mate',
+        whitePlayer: 'alice',
+        blackPlayer: '',
+        result: 'Player1Wins',
+      };
+
+      const identityMap = {
+        player1Address: 'GPLAYER1AAAA',
+        player1Username: 'alice',
+        player2Address: 'GPLAYER2BBBB',
+        player2Username: 'bob',
+        platform: 'lichess',
+      };
+
+      const result = verifyPlayerIdentities(mockMatch, gameResult, identityMap);
+      expect(result.valid).toBe(false);
+    });
   });
 
   describe('createIdentityMap', () => {

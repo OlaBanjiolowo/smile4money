@@ -121,6 +121,18 @@ export function verifyPlayerIdentities(
   const player1Norm = normalize(identityMap.player1Username);
   const player2Norm = normalize(identityMap.player2Username);
 
+  // An empty username must never be considered a valid player identity.
+  // If either the API-reported name or the registered name is empty, the
+  // normalization above would collapse it to "" and could otherwise produce a
+  // false-positive match (e.g. an empty registered name matching an empty API
+  // name). Reject any pairing that contains an empty username.
+  if (!whiteNorm || !blackNorm || !player1Norm || !player2Norm) {
+    return {
+      valid: false,
+      error: `Player identity contains an empty username. Expected (${player1Norm || '<empty>'}, ${player2Norm || '<empty>'}) but got (${whiteNorm || '<empty>'}, ${blackNorm || '<empty>'})`,
+    };
+  }
+
   // Check for exact match: white=player1, black=player2
   if (whiteNorm === player1Norm && blackNorm === player2Norm) {
     return { valid: true };
