@@ -507,7 +507,7 @@ fn test_cancel_active_match_unilateral_fails() {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
     let safe_address = Address::generate(&env);
-    client.initialize(&oracle, &admin, &token_addr, &safe_address);
+    client.initialize(&oracle, &admin, &token_addr, &safe_address, &None, &None);
     asset_client.mint(&contract_id, &crate::ESCROW_RESERVE_BUFFER_STROOPS);
 
     let expiration = env.ledger().sequence() + 1000000;
@@ -1411,6 +1411,52 @@ fn test_transfer_admin_rejects_zero_address() {
     .unwrap();
 
     assert_eq!(client.try_transfer_admin(&admin, &zero_admin), Err(Ok(Error::InvalidAdmin)));
+}
+
+#[test]
+fn test_transfer_admin_succeeds_and_rotates_admin() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let new_admin = Address::generate(&env);
+
+    // Successful rotation
+    assert!(client.try_transfer_admin(&admin, &new_admin).is_ok());
+
+    // Old admin can no longer perform admin rotation
+    let another = Address::generate(&env);
+    assert_eq!(
+        client.try_transfer_admin(&admin, &another),
+        Err(Ok(Error::Unauthorized))
+    );
+
+    // New admin can now rotate again
+    assert!(client.try_transfer_admin(&new_admin, &another).is_ok());
+}
+
+#[test]
+fn test_transfer_admin_self_transfer_rejected() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // new_admin == current_admin must be rejected
+    assert_eq!(
+        client.try_transfer_admin(&admin, &admin),
+        Err(Ok(Error::InvalidAdmin))
+    );
+}
+
+#[test]
+fn test_transfer_admin_unauthorized_caller_rejected() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let impostor = Address::generate(&env);
+
+    // A non-admin caller must be rejected
+    assert_eq!(
+        client.try_transfer_admin(&impostor, &admin),
+        Err(Ok(Error::Unauthorized))
+    );
 }
 
 #[test]
