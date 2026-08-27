@@ -148,7 +148,7 @@ impl EscrowContract {
     /// This is the time the admin has to call [`override_result`](EscrowContract::override_result)
     /// after the oracle submits a result, before it becomes final. Defaults to
     /// `DISPUTE_WINDOW_LEDGERS` (~24 hours) if not configured at initialization.
-    pub fn get_dispute_window_ledgers(env: Env) -> u32 {
+    pub fn get_dispute_window_ledgers(env: &Env) -> u32 {
         env.storage()
             .instance()
             .get(&DataKey::DisputeWindowLedgers)
@@ -160,7 +160,7 @@ impl EscrowContract {
     /// This is the time an active match can remain without an oracle result
     /// before either player may call [`claim_timeout`](EscrowContract::claim_timeout).
     /// Defaults to `TIMEOUT_LEDGERS` (~7 days) if not configured at initialization.
-    pub fn get_timeout_ledgers(env: Env) -> u32 {
+    pub fn get_timeout_ledgers(env: &Env) -> u32 {
         env.storage()
             .instance()
             .get(&DataKey::TimeoutLedgers)
@@ -742,7 +742,7 @@ impl EscrowContract {
         // Ensure the dispute window has not yet expired; after expiry the result
         // is final and must be processed via finalize_result.
         let current = env.ledger().sequence();
-        let dispute_window = Self::get_dispute_window_ledgers(env.clone());
+        let dispute_window = Self::get_dispute_window_ledgers(&env);
         if current > m.pending_result_ledger + dispute_window {
             return Err(Error::DisputeWindowActive);
         }
@@ -821,7 +821,7 @@ impl EscrowContract {
         }
 
         let current = env.ledger().sequence();
-        let dispute_window = Self::get_dispute_window_ledgers(env.clone());
+        let dispute_window = Self::get_dispute_window_ledgers(&env);
         if current <= m.pending_result_ledger + dispute_window {
             return Err(Error::DisputeWindowActive);
         }
@@ -918,7 +918,7 @@ impl EscrowContract {
 
         let activated = m.activated_ledger.ok_or(Error::InvalidState)?;
         let current = env.ledger().sequence();
-        let timeout = Self::get_timeout_ledgers(env.clone());
+        let timeout = Self::get_timeout_ledgers(&env);
         if current <= m.activated_ledger + timeout {
             // Timeout period has not elapsed yet — reject with MatchTimedOut reused
             // as "too early". We return MatchTimedOut here to keep error codes minimal;
