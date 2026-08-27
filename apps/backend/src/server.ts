@@ -2,7 +2,9 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { app } from './app.js';
-import { initializeQueue, closeQueue, startRetryWorker, listDlqEntries } from './queue.js';
+import { initializeQueue, closeQueue, startRetryWorker, listDlqEntries, writeToDlq } from './queue.js';
+import { PollingJobStore, PollingWorker } from './services/polling.js';
+import ChessPlatformPoller from './services/game-poller.js';
 import logger from './logger.js';
 
 const port = Number(process.env.PORT || 4000);
@@ -38,6 +40,46 @@ async function main() {
     // Start the retry worker
     const stopRetryWorker = startRetryWorker(retryOracleSubmission, 60_000);
 
+    // Set up the polling worker with DLQ wiring for max-attempts exceeded
+    const pollingStore = new PollingJobStore();
+    const gamePoller = new ChessPlatformPoller();
+    const pollingWorker = new PollingWorker(pollingStore, gamePoller, {
+      pollingIntervalMs: Number(process.env.POLLING_INTERVAL_MS ?? 30_000),
+      maxPollingAttempts: Number(process.env.MAX_POLLING_ATTEMPTS ?? 1440),
+      backoffMultiplier: Number(process.env.POLLING_BACKOFF_MULTIPLIER ?? 1.0),
+      onGameCompleted: async (job, result) => {
+        logger.info(
+          {
+            match_id: job.matchId,
+            game_id: job.gameId,
+            platform: job.platform,
+            result,
+            attempts: job.pollingAttempt,
+          },
+          'polling_job_game_completed_submitting_to_oracle',
+        );
+        // TODO: invoke the oracle submission pipeline here
+        // e.g. await submitToOracle({ matchId: job.matchId, gameId: job.gameId, result })
+      },
+      onMaxAttemptsExceeded: async (job, reason) => {
+        logger.error(
+          {
+            match_id: job.matchId,
+            game_id: job.gameId,
+            platform: job.platform,
+            attempts: job.pollingAttempt,
+            reason,
+          },
+          'polling_job_max_attempts_exceeded_writing_to_dlq',
+        );
+        await writeToDlq(
+          { job },
+          reason ?? 'max polling attempts exceeded',
+        );
+      },
+    });
+    const stopPollingWorker = pollingWorker.start();
+
     // Start the Express server
     const server = app.listen(port, () => {
       logger.info(
@@ -49,6 +91,7 @@ async function main() {
     // Graceful shutdown
     const shutdown = async () => {
       logger.info('Shutting down gracefully...');
+      stopPollingWorker();
       stopRetryWorker();
       await closeQueue();
       server.close(() => {
