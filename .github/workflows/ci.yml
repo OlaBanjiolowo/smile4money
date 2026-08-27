@@ -249,3 +249,34 @@ jobs:
           name: frontend-coverage-${{ github.sha }}
           path: apps/frontend/coverage/
           retention-days: 30
+
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/backend
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+
+      - name: Cache node_modules
+        uses: actions/cache@6f8efc29b200d32929f49075959781ed54ec270c # v3
+        with:
+          path: apps/backend/node_modules
+          key: ${{ runner.os }}-backend-node-${{ hashFiles('apps/backend/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-backend-node-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript compilation check
+        run: npm run build
+
+      - name: Run tests
+        run: npm test
+
