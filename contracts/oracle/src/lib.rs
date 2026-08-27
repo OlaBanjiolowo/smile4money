@@ -307,8 +307,9 @@ impl OracleContract {
     /// Enumerate stored results for off-chain reconciliation.
     ///
     /// Returns up to `limit` `(match_id, ResultEntry)` pairs starting from `start`,
-    /// scanning match IDs `[start, start + limit)`. IDs with no stored result are
-    /// skipped. `limit` is capped at [`MAX_LIST_LIMIT`] (100) to bound compute.
+    /// scanning match IDs up to `min(start + limit, get_result_count())`. IDs with no
+    /// stored result are skipped. `limit` is capped at [`MAX_LIST_LIMIT`] (100) to
+    /// bound compute.
     ///
     /// Use [`get_result_count`] to determine the upper bound of submitted results and
     /// construct tight page requests — this avoids wasting compute budget on storage
@@ -322,9 +323,14 @@ impl OracleContract {
     /// * `limit` — Maximum number of entries to return (capped at 100).
     pub fn list_results(env: Env, start: u64, limit: u32) -> Vec<(u64, ResultEntry)> {
         let cap = limit.min(MAX_LIST_LIMIT);
+        let result_count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ResultCount)
+            .unwrap_or(0u64);
+        let end = start.saturating_add(cap as u64).min(result_count);
         let mut out: Vec<(u64, ResultEntry)> = Vec::new(&env);
-        for i in 0..cap as u64 {
-            let id = start.saturating_add(i);
+        for id in start..end {
             if let Some(entry) = env
                 .storage()
                 .persistent()
@@ -843,21 +849,19 @@ mod tests {
         // match_id 2 has no result — should be skipped
         client.submit_result(&3u64, &String::from_str(&env, "game3"), &MatchResult::Player2Wins);
 
-        // list IDs 0..4 with cap 10
+        // ResultCount is 3, so only IDs 0..3 are scanned; ID 3 is outside the range.
         let results = client.list_results(&0u64, &10u32);
-        assert_eq!(results.len(), 3, "should skip ID 2 which has no result");
+        assert_eq!(results.len(), 2, "should stop scanning at ResultCount");
 
         let ids: soroban_sdk::Vec<u64> = soroban_sdk::Vec::from_array(
             &env,
             [
                 results.get(0).unwrap().0,
                 results.get(1).unwrap().0,
-                results.get(2).unwrap().0,
             ],
         );
         assert_eq!(ids.get(0).unwrap(), 0u64);
         assert_eq!(ids.get(1).unwrap(), 1u64);
-        assert_eq!(ids.get(2).unwrap(), 3u64);
     }
 
     #[test]
