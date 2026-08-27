@@ -17,6 +17,7 @@ use soroban_sdk::contracterror;
 /// |  4   | AlreadyInitialized | Contract has already been initialized                    |
 /// |  5   | InvalidGameId      | game_id is empty or exceeds the 64-byte maximum          |
 /// |  6   | TransferFailed     | Token transfer in withdraw failed                        |
+/// |  7   | InvalidAmount      | withdraw amount must be greater than zero               |
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -38,4 +39,7 @@ pub enum Error {
 
     /// [E006] Token transfer failed during `withdraw`.
     TransferFailed = 6,
+
+    /// [E007] Invalid amount supplied to `withdraw` (amount must be > 0).
+    InvalidAmount = 7,
 }

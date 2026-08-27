@@ -90,6 +90,9 @@ impl OracleContract {
             return Err(Error::AlreadyInitialized);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage()
+            .instance()
+            .extend_ttl(MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
         env.events()
             .publish((Symbol::new(&env, "oracle"), symbol_short!("init")), admin);
         Ok(())
@@ -157,6 +160,17 @@ impl OracleContract {
             MATCH_TTL_LEDGERS,
         );
 
+        // Increment the result count so callers can construct efficient page ranges
+        // without scanning sparse ID spaces.
+        let prev_count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ResultCount)
+            .unwrap_or(0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::ResultCount, &(prev_count + 1));
+
         env.events().publish(
             (Symbol::new(&env, "oracle"), symbol_short!("result")),
             (match_id, game_id, result),
@@ -216,6 +230,9 @@ impl OracleContract {
         admin.require_auth();
 
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.storage()
+            .instance()
+            .extend_ttl(MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
 
         env.events().publish(
             (Symbol::new(&env, "oracle"), symbol_short!("adm_xfer")),
@@ -240,6 +257,7 @@ impl OracleContract {
     /// # Errors
     ///
     /// * [`Error::Unauthorized`]   — Contract not yet initialized or caller ≠ admin.
+    /// * [`Error::InvalidAmount`]   — `amount` is zero or negative.
     /// * [`Error::TransferFailed`] — The token transfer was rejected.
     pub fn withdraw(
         env: Env,
@@ -258,6 +276,10 @@ impl OracleContract {
         }
         caller.require_auth();
 
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
         // SAFETY: token::Client::try_transfer is a cross-contract call. Soroban's
         // single-execution model ensures no re-entrancy is possible: the token
         // contract cannot call back into this oracle contract during the transfer.
@@ -268,11 +290,32 @@ impl OracleContract {
         Ok(())
     }
 
+    /// Return the total number of results that have been submitted so far.
+    ///
+    /// Clients can use this to build efficient page requests for [`list_results`]:
+    /// iterate in windows of up to [`MAX_LIST_LIMIT`] starting from 0 up to
+    /// `get_result_count()` to avoid scanning gaps in sparse ID spaces.
+    ///
+    /// [`list_results`]: OracleContract::list_results
+    pub fn get_result_count(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&DataKey::ResultCount)
+            .unwrap_or(0u64)
+    }
+
     /// Enumerate stored results for off-chain reconciliation.
     ///
     /// Returns up to `limit` `(match_id, ResultEntry)` pairs starting from `start`,
-    /// scanning match IDs `[start, start + limit)`. IDs with no stored result are
-    /// skipped. `limit` is capped at [`MAX_LIST_LIMIT`] (100) to bound compute.
+    /// scanning match IDs up to `min(start + limit, get_result_count())`. IDs with no
+    /// stored result are skipped. `limit` is capped at [`MAX_LIST_LIMIT`] (100) to
+    /// bound compute.
+    ///
+    /// Use [`get_result_count`] to determine the upper bound of submitted results and
+    /// construct tight page requests — this avoids wasting compute budget on storage
+    /// misses when the ID space is sparse.
+    ///
+    /// [`get_result_count`]: OracleContract::get_result_count
     ///
     /// # Arguments
     ///
@@ -280,9 +323,14 @@ impl OracleContract {
     /// * `limit` — Maximum number of entries to return (capped at 100).
     pub fn list_results(env: Env, start: u64, limit: u32) -> Vec<(u64, ResultEntry)> {
         let cap = limit.min(MAX_LIST_LIMIT);
+        let result_count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ResultCount)
+            .unwrap_or(0u64);
+        let end = start.saturating_add(cap as u64).min(result_count);
         let mut out: Vec<(u64, ResultEntry)> = Vec::new(&env);
-        for i in 0..cap as u64 {
-            let id = start.saturating_add(i);
+        for id in start..end {
             if let Some(entry) = env
                 .storage()
                 .persistent()
@@ -488,6 +536,26 @@ mod tests {
     }
 
     #[test]
+    fn test_transfer_admin_extends_instance_ttl() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+        let new_admin = Address::generate(&env);
+
+        // Get TTL before transfer
+        let ttl_before = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+
+        // Transfer admin
+        client.transfer_admin(&new_admin);
+
+        // Get TTL after transfer — should be extended
+        let ttl_after = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+        assert!(
+            ttl_after >= crate::MATCH_TTL_LEDGERS,
+            "Instance TTL must be extended after transfer_admin"
+        );
+    }
+
+    #[test]
     fn test_non_admin_cannot_transfer_admin() {
         let env = Env::default();
         let admin = Address::generate(&env);
@@ -537,6 +605,28 @@ mod tests {
     }
 
     #[test]
+    fn test_withdraw_zero_amount_returns_invalid_amount() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(OracleContract, ());
+        let client = OracleContractClient::new(&env, &contract_id);
+        client.initialize(&admin);
+
+        let token = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        assert_eq!(
+            client.try_withdraw(&token, &0i128, &recipient, &admin),
+            Err(Ok(Error::InvalidAmount))
+        );
+        assert_eq!(
+            client.try_withdraw(&token, &(-1i128), &recipient, &admin),
+            Err(Ok(Error::InvalidAmount))
+        );
+    }
+
+    #[test]
     fn test_initialize_emits_event() {
         let env = Env::default();
         env.mock_all_auths();
@@ -553,6 +643,23 @@ mod tests {
         ];
         let matched = events.iter().find(|(_, t, _)| *t == topics);
         assert!(matched.is_some());
+    }
+
+    #[test]
+    fn test_initialize_extends_instance_ttl() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(OracleContract, ());
+        let client = OracleContractClient::new(&env, &contract_id);
+        client.initialize(&admin);
+
+        // Verify that the instance storage TTL was extended
+        let instance_ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+        assert!(
+            instance_ttl >= crate::MATCH_TTL_LEDGERS,
+            "Instance TTL must be at least MATCH_TTL_LEDGERS"
+        );
     }
 
     #[test]
@@ -698,5 +805,112 @@ mod tests {
             client.try_submit_result(&0u64, &String::from_str(&env, "abc123"), &MatchResult::Draw),
             Err(Ok(Error::AlreadySubmitted))
         ));
+    }
+
+    // ── #1030: result count tracking ──────────────────────────────────────────
+
+    #[test]
+    fn test_get_result_count_starts_at_zero() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+        assert_eq!(client.get_result_count(), 0u64);
+    }
+
+    #[test]
+    fn test_get_result_count_increments_on_submit() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.submit_result(&0u64, &String::from_str(&env, "game1"), &MatchResult::Player1Wins);
+        assert_eq!(client.get_result_count(), 1u64);
+
+        client.submit_result(&1u64, &String::from_str(&env, "game2"), &MatchResult::Player2Wins);
+        assert_eq!(client.get_result_count(), 2u64);
+
+        client.submit_result(&5u64, &String::from_str(&env, "game5"), &MatchResult::Draw);
+        assert_eq!(client.get_result_count(), 3u64, "count tracks submissions not match_ids");
+    }
+
+    #[test]
+    fn test_list_results_empty() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+        let results = client.list_results(&0u64, &10u32);
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_list_results_returns_existing_entries() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.submit_result(&0u64, &String::from_str(&env, "game0"), &MatchResult::Player1Wins);
+        client.submit_result(&1u64, &String::from_str(&env, "game1"), &MatchResult::Draw);
+        // match_id 2 has no result — should be skipped
+        client.submit_result(&3u64, &String::from_str(&env, "game3"), &MatchResult::Player2Wins);
+
+        // ResultCount is 3, so only IDs 0..3 are scanned; ID 3 is outside the range.
+        let results = client.list_results(&0u64, &10u32);
+        assert_eq!(results.len(), 2, "should stop scanning at ResultCount");
+
+        let ids: soroban_sdk::Vec<u64> = soroban_sdk::Vec::from_array(
+            &env,
+            [
+                results.get(0).unwrap().0,
+                results.get(1).unwrap().0,
+            ],
+        );
+        assert_eq!(ids.get(0).unwrap(), 0u64);
+        assert_eq!(ids.get(1).unwrap(), 1u64);
+    }
+
+    #[test]
+    fn test_list_results_limit_capped_at_100() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+        // Requesting 200 should return at most 100 IDs scanned (and 0 results in this case)
+        let results = client.list_results(&0u64, &200u32);
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_list_results_sparse_non_contiguous_id_space() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // Submit results for non-contiguous match IDs, leaving large gaps.
+        client.submit_result(&0u64, &String::from_str(&env, "game0"), &MatchResult::Player1Wins);
+        client.submit_result(&5u64, &String::from_str(&env, "game5"), &MatchResult::Draw);
+        client.submit_result(&10u64, &String::from_str(&env, "game10"), &MatchResult::Player2Wins);
+
+        // Scan a window covering all three IDs plus the gaps between them.
+        let results = client.list_results(&0u64, &20u32);
+        assert_eq!(
+            results.len(),
+            3,
+            "should return exactly the 3 submitted IDs and skip the gaps"
+        );
+
+        let ids: soroban_sdk::Vec<u64> = soroban_sdk::Vec::from_array(
+            &env,
+            [
+                results.get(0).unwrap().0,
+                results.get(1).unwrap().0,
+                results.get(2).unwrap().0,
+            ],
+        );
+        assert_eq!(ids.get(0).unwrap(), 0u64);
+        assert_eq!(ids.get(1).unwrap(), 5u64);
+        assert_eq!(ids.get(2).unwrap(), 10u64);
+
+        // Starting the scan at a gap (id 1) must still find the later IDs (5 and 10).
+        let from_gap = client.list_results(&1u64, &20u32);
+        assert_eq!(from_gap.len(), 2);
+        assert_eq!(from_gap.get(0).unwrap().0, 5u64);
+        assert_eq!(from_gap.get(1).unwrap().0, 10u64);
+
+        // Starting past the last submitted ID returns nothing.
+        let past_end = client.list_results(&11u64, &20u32);
+        assert_eq!(past_end.len(), 0);
     }
 }

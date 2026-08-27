@@ -46,7 +46,7 @@ jobs:
           stellar keys add deployer --secret-key "$MAINNET_DEPLOYER_SECRET_KEY"
 
       - name: Deploy contracts
-        run: ./scripts/deploy_mainnet.sh
+        run: echo "yes" | ./scripts/deploy_mainnet.sh
 
       - name: Deployment summary
         env:

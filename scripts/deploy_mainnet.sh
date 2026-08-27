@@ -39,10 +39,13 @@ DEPLOYER_ADDRESS=$(stellar keys address "$IDENTITY")
 echo "Deployer: $DEPLOYER_ADDRESS"
 echo "Network:  $NETWORK (PUBLIC — real XLM will be spent)"
 echo ""
-read -r -p "Continue with mainnet deployment? [y/N] " confirm
-if [[ "${confirm,,}" != "y" ]]; then
-  echo "Aborted."
-  exit 0
+echo "WARNING: This will deploy contracts to the Stellar PUBLIC network."
+echo "         Transactions are irreversible and will consume real XLM."
+echo ""
+read -r -p 'Type exactly "yes" to confirm mainnet deployment: ' confirm
+if [[ "$confirm" != "yes" ]]; then
+  echo "Aborted. (Input was not exactly \"yes\")"
+  exit 1
 fi
 
 # Build WASM
