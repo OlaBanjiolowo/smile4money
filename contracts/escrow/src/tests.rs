@@ -1477,6 +1477,57 @@ fn test_deposit_event_player_label() {
 }
 
 #[test]
+fn test_first_deposit_emits_half_fun_and_second_activates() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "half_fun_ev"),
+        &Platform::Lichess,
+    );
+    let half_fun_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        symbol_short!("half_fun").into_val(&env),
+    ];
+
+    client.deposit(&id, &player1);
+    let first_deposit_events = env.events().all();
+    let half_fun_event = first_deposit_events
+        .iter()
+        .find(|(_, topics, _)| *topics == half_fun_topics)
+        .expect("half_fun event not found after first deposit");
+    let (event_id, event_player, event_amount, event_label): (u64, Address, i128, Symbol) =
+        TryFromVal::try_from_val(&env, &half_fun_event.2).unwrap();
+    assert_eq!(event_id, id);
+    assert_eq!(event_player, player1);
+    assert_eq!(event_amount, 100);
+    assert_eq!(event_label, symbol_short!("player1"));
+
+    client.deposit(&id, &player2);
+    let second_deposit_events = env.events().all();
+    assert!(!second_deposit_events
+        .iter()
+        .any(|(_, topics, _)| *topics == half_fun_topics));
+
+    let activated_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        symbol_short!("activated").into_val(&env),
+    ];
+    let activated_event = second_deposit_events
+        .iter()
+        .find(|(_, topics, _)| *topics == activated_topics)
+        .expect("activated event not found after second deposit");
+    let activated_id: u64 = TryFromVal::try_from_val(&env, &activated_event.2).unwrap();
+    assert_eq!(activated_id, id);
+}
+
+#[test]
 fn test_submit_result_emits_event() {
     let (env, contract_id, oracle, player1, player2, token, _admin, _safe_address) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);

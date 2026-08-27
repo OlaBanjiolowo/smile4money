@@ -460,6 +460,12 @@ impl EscrowContract {
             m.player2_deposited = true;
         }
 
+        let player_label = if is_p1 {
+            symbol_short!("player1")
+        } else {
+            symbol_short!("player2")
+        };
+
         if m.player1_deposited && m.player2_deposited {
             // STATE TRANSITION: Pending → Active
             // Record the ledger at which the match became active for timeout tracking.
@@ -469,13 +475,18 @@ impl EscrowContract {
                 (Symbol::new(&env, "match"), symbol_short!("activated")),
                 match_id,
             );
+        } else {
+            env.events().publish(
+                (Symbol::new(&env, "match"), symbol_short!("half_fun")),
+                (
+                    match_id,
+                    player.clone(),
+                    m.stake_amount,
+                    player_label.clone(),
+                ),
+            );
         }
 
-        let player_label = if is_p1 {
-            symbol_short!("player1")
-        } else {
-            symbol_short!("player2")
-        };
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("deposit")),
             (match_id, player, m.stake_amount, player_label),
