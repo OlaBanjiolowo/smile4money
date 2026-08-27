@@ -3132,6 +3132,54 @@ fn test_list_matches_after_limit() {
     assert_eq!(result.get(9), 15);
 }
 
+/// Issue #68: get_game_id_owner must return the match_id that registered a
+/// given game_id, and None for unregistered game_ids.
+#[test]
+fn test_get_game_id_owner_returns_match_id_and_none_for_unknown() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin, _safe_address) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_a = String::from_str(&env, "game_owner_a");
+    let game_b = String::from_str(&env, "game_owner_b");
+    let game_unknown = String::from_str(&env, "game_owner_unknown");
+
+    let id_a = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_a,
+        &Platform::Lichess,
+    );
+    let id_b = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_b,
+        &Platform::Lichess,
+    );
+
+    // Registered game_ids return their owning match_id.
+    assert_eq!(
+        client.get_game_id_owner(&game_a),
+        Some(id_a),
+        "registered game_id must return its match_id"
+    );
+    assert_eq!(
+        client.get_game_id_owner(&game_b),
+        Some(id_b),
+        "registered game_id must return its match_id"
+    );
+
+    // Unregistered game_id returns None.
+    assert_eq!(
+        client.get_game_id_owner(&game_unknown),
+        None,
+        "unregistered game_id must return None"
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Issue #1122 — Property-based tests for state machine transition invariants
 // ═══════════════════════════════════════════════════════════════════════════
