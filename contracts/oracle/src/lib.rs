@@ -410,40 +410,6 @@ mod tests {
     }
 
     #[test]
-    fn test_non_admin_cannot_submit_result() {
-        let env = Env::default();
-        let admin = Address::generate(&env);
-        let non_admin = Address::generate(&env);
-        let contract_id = env.register(OracleContract, ());
-        let client = OracleContractClient::new(&env, &contract_id);
-        client.initialize(&admin);
-
-        use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
-        env.mock_auths(&[MockAuth {
-            address: &non_admin,
-            invoke: &MockAuthInvoke {
-                contract: &contract_id,
-                fn_name: "submit_result",
-                args: (
-                    0u64,
-                    String::from_str(&env, "game"),
-                    MatchResult::Player1Wins,
-                )
-                    .into_val(&env),
-                sub_invokes: &[],
-            },
-        }]);
-
-        assert!(client
-            .try_submit_result(
-                &0u64,
-                &String::from_str(&env, "game"),
-                &MatchResult::Player1Wins
-            )
-            .is_err());
-    }
-
-    #[test]
     fn test_submit_result_by_non_admin_returns_unauthorized() {
         let env = Env::default();
         let admin = Address::generate(&env);
