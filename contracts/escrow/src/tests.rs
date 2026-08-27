@@ -3263,8 +3263,8 @@ fn test_transfer_admin_extends_instance_ttl() {
 // Issue #1034 — emergency_drain drain_noop event test
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Issue #1034: when emergency_drain is called on a zero-balance contract,
-/// a drain_noop event must be emitted to preserve the audit trail.
+/// Issue #1034 / #69: when emergency_drain is called on a zero-balance contract,
+/// it must emit a drn_noop event, return Ok(()), and must NOT attempt a transfer.
 #[test]
 fn test_emergency_drain_zero_balance_emits_drain_noop() {
     let env = Env::default();
@@ -3278,18 +3278,31 @@ fn test_emergency_drain_zero_balance_emits_drain_noop() {
     let token_addr = env
         .register_stellar_asset_contract_v2(admin.clone())
         .address();
+    let token_client = TokenClient::new(&env, &token_addr);
 
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&oracle, &admin, &token_addr, &safe_address);
 
+    // Sanity: contract starts with a zero balance
+    assert_eq!(token_client.balance(&contract_id), 0);
+    assert_eq!(token_client.balance(&safe_address), 0);
+
     // Pause the contract (required by emergency_drain)
     client.pause();
 
-    // Call emergency_drain on an empty contract
-    client.emergency_drain(&admin);
+    // Call emergency_drain on an empty contract — must succeed (no error)
+    assert!(
+        client.try_emergency_drain(&admin).is_ok(),
+        "emergency_drain on zero balance must return Ok(())"
+    );
 
-    // Verify the drain_noop event was emitted
+    // Verify no funds moved: contract and safe_address balances are still zero
+    assert_eq!(token_client.balance(&contract_id), 0);
+    assert_eq!(token_client.balance(&safe_address), 0);
+
+    // Verify the drain_noop event was emitted (with amount 0) to preserve
+    // the audit trail, rather than a real drain event or zero-amount transfer.
     let events = env.events().all();
     let noop_event = events.iter().find(|(_, t, _)| {
         t.len() == 2
@@ -3302,6 +3315,10 @@ fn test_emergency_drain_zero_balance_emits_drain_noop() {
         noop_event.is_some(),
         "drain_noop event must be emitted when emergency_drain is called on zero balance"
     );
+    let (_, _, data) = noop_event.unwrap();
+    let (amount, _dest, _admin): (i128, Address, Address) =
+        soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(amount, 0, "drn_noop event amount must be 0");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
