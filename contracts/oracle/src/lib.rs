@@ -868,4 +868,45 @@ mod tests {
         let results = client.list_results(&0u64, &200u32);
         assert_eq!(results.len(), 0);
     }
+
+    #[test]
+    fn test_list_results_sparse_non_contiguous_id_space() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // Submit results for non-contiguous match IDs, leaving large gaps.
+        client.submit_result(&0u64, &String::from_str(&env, "game0"), &MatchResult::Player1Wins);
+        client.submit_result(&5u64, &String::from_str(&env, "game5"), &MatchResult::Draw);
+        client.submit_result(&10u64, &String::from_str(&env, "game10"), &MatchResult::Player2Wins);
+
+        // Scan a window covering all three IDs plus the gaps between them.
+        let results = client.list_results(&0u64, &20u32);
+        assert_eq!(
+            results.len(),
+            3,
+            "should return exactly the 3 submitted IDs and skip the gaps"
+        );
+
+        let ids: soroban_sdk::Vec<u64> = soroban_sdk::Vec::from_array(
+            &env,
+            [
+                results.get(0).unwrap().0,
+                results.get(1).unwrap().0,
+                results.get(2).unwrap().0,
+            ],
+        );
+        assert_eq!(ids.get(0).unwrap(), 0u64);
+        assert_eq!(ids.get(1).unwrap(), 5u64);
+        assert_eq!(ids.get(2).unwrap(), 10u64);
+
+        // Starting the scan at a gap (id 1) must still find the later IDs (5 and 10).
+        let from_gap = client.list_results(&1u64, &20u32);
+        assert_eq!(from_gap.len(), 2);
+        assert_eq!(from_gap.get(0).unwrap().0, 5u64);
+        assert_eq!(from_gap.get(1).unwrap().0, 10u64);
+
+        // Starting past the last submitted ID returns nothing.
+        let past_end = client.list_results(&11u64, &20u32);
+        assert_eq!(past_end.len(), 0);
+    }
 }
