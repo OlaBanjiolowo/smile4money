@@ -2,7 +2,10 @@
 
 ## System Components
 
-smile4money is composed of two Soroban smart contracts and an off-chain oracle service.
+smile4money is composed of three Soroban smart contracts — **escrow**, **oracle**,
+and **contract-registry** — and an off-chain oracle service. The
+[contract-registry](#contract-registry) is a lightweight on-chain directory of
+deployed contract addresses (see its dedicated section below).
 
 ```mermaid
 flowchart TD
@@ -11,6 +14,7 @@ flowchart TD
     FE[Frontend]
     EC[Escrow Contract<br/>Soroban]
     OC[Oracle Contract<br/>Soroban]
+    CR[Contract Registry<br/>Soroban]
     OOS[Off-chain Oracle<br/>Service]
     LA[Lichess API]
     CA[Chess.com API]
@@ -30,6 +34,10 @@ flowchart TD
 
     EC -->|payout<br/>stake_amount × 2| P1
     EC -->|payout<br/>stake_amount × 2| P2
+
+    EC -.->|registered at deploy| CR
+    OC -.->|registered at deploy| CR
+    FE -.->|resolve live contract IDs| CR
 ```
 
 ## Match Lifecycle
