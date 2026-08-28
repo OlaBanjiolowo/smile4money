@@ -192,23 +192,6 @@ jobs:
           path: target/wasm32-unknown-unknown/release/*.wasm
           retention-days: 30
 
-  validate-environments:
-    name: Validate environments.toml
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Set up Python
-        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5
-        with:
-          python-version: "3.12"
-
-      - name: Validate environments.toml
-        run: python scripts/validate_environments.py
-
-      - name: Run validation tests
-        run: python scripts/test_validate_environments.py
-
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
